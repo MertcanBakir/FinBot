@@ -1,0 +1,6 @@
+# Full application environment plus local test-quality tooling.
+-r ../requirements.txt
+
+pytest-cov==7.1.0
+pytest-socket==0.8.1
+ruff==0.17.1

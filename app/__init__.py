@@ -1,0 +1,1 @@
+"""FinBot application package."""

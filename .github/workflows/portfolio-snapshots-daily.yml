@@ -1,0 +1,37 @@
+name: Portfolio Snapshots Daily
+
+on:
+  schedule:
+    # Every day at 02:00 Turkey time (23:00 UTC, previous UTC date).
+    - cron: "0 23 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: portfolio-snapshots-daily
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-snapshots:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements/jobs/portfolio-snapshots.txt
+      - run: |
+          python -m pip install --requirement requirements/jobs/portfolio-snapshots.txt
+          python -m pip check
+      - name: Build Portfolio Snapshots
+        env:
+          SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          TIMEZONE: Europe/Istanbul
+        run: python -m app.jobs.portfolio_snapshots_job --apply-db

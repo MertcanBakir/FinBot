@@ -1,0 +1,52 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--disable-socket",
+    "--allow-unix-socket",
+]
+asyncio_mode = "strict"
+markers = [
+    "integration: requires an isolated local PostgreSQL or Supabase instance",
+    "smoke: calls a live external provider and must not run in the fast test suite",
+]
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+relative_files = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+precision = 2
+fail_under = 80
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+[tool.coverage.xml]
+output = "coverage.xml"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = [
+    "E501",  # Line wrapping belongs to the formatter, which is not enabled yet.
+    "F841",  # Existing jobs/tests intentionally retain some diagnostic results.
+    "UP006", # Keep the existing typing style out of the first lint migration.
+    "UP007",
+    "UP017",
+    "UP035",
+    "UP045",
+    "UP042", # StrEnum migration can change serialized/repr behavior.
+]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/export_reference_seed.py" = ["E402"]
+"tests/test_earnings_refresh_job.py" = ["E402"]

@@ -1,0 +1,8 @@
+[
+  {"symbol": "ETHUSDT", "quoteVolume": "2000"},
+  {"symbol": "BTCUSDT", "quoteVolume": "3000"},
+  {"symbol": "DUPUSDT", "quoteVolume": "2500"},
+  {"symbol": "USDCUSDT", "quoteVolume": "9999"},
+  {"symbol": "XRPUSDT", "quoteVolume": "5000"},
+  {"symbol": "SOLUSDT", "quoteVolume": "4000"}
+]

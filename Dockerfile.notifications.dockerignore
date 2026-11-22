@@ -1,0 +1,9 @@
+**
+!app/
+!app/**
+!requirements/
+!requirements/jobs/
+!requirements/jobs/portfolio-snapshots.txt
+!requirements/jobs/notifications.txt
+**/__pycache__
+**/*.pyc

@@ -1,0 +1,9 @@
+FROM python:3.11-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+WORKDIR /app
+COPY requirements/jobs/portfolio-snapshots.txt requirements/jobs/notifications.txt /app/requirements/jobs/
+RUN pip install --no-cache-dir -r requirements/jobs/notifications.txt \
+    && useradd --uid 10001 --create-home worker
+COPY --chown=10001:10001 app /app/app
+USER 10001:10001
+CMD ["python", "-m", "app.jobs.push_notifications_worker", "--apply-db"]

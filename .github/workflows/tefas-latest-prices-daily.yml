@@ -1,0 +1,45 @@
+name: Daily TEFAS Latest Prices Sync
+
+on:
+  schedule:
+    # Run weekdays (Mon-Fri) at 18:00 UTC (21:00 Europe/Istanbul)
+    - cron: "0 18 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tefas-prices-sync
+  cancel-in-progress: false
+
+jobs:
+  sync-tefas-prices:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements/jobs/tefas.txt
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --requirement requirements/jobs/tefas.txt
+          python -m pip check
+
+      - name: Synchronize TEFAS Latest Prices
+        env:
+          SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          TIMEZONE: "Europe/Istanbul"
+        run: |
+          python -m app.jobs.tefas_latest_prices_job --apply-db

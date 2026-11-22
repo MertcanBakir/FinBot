@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Environment
+.env
+
+# Local Supabase CLI state may contain project and connection metadata.
+supabase/.temp/
+
+# Deployment records and operator handoffs are environment-specific.
+docs/deployments/
+/AWS_TRADINGAGENTS_HANDOFF.md
+
+# Testing & Coverage
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+supabase/.branches/
+
+# IDE / OS
+.DS_Store
+.vscode/
+.idea/

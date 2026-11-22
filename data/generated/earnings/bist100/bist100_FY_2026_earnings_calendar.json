@@ -1,0 +1,30 @@
+{
+  "schema_version": "2.1",
+  "dataset_type": "fiscal_period_partition",
+  "generated_at": "2026-08-22T08:29:12.354964+03:00",
+  "market": "BIST100",
+  "fiscal_year": 2026,
+  "fiscal_period": "FY",
+  "status": "success",
+  "provider_status": "success",
+  "events": [
+    {
+      "symbol": "AKSA",
+      "company_name": "AKSA AKRİLİK KİMYA SANAYİİ A.Ş.",
+      "fiscal_year": 2026,
+      "fiscal_period": "FY",
+      "earnings_date": "2027-02-17",
+      "period_start": "2026-01-01",
+      "period_end": "2026-12-31",
+      "publish_date": null,
+      "date_type": "company_announced",
+      "source": "Official IR",
+      "source_provider": "AKSA Investor Relations",
+      "source_type": "official_financial_calendar",
+      "source_event_id": "aksa:2026:FY",
+      "disclosure_index": null,
+      "source_url": "https://www.aksa.com/yatirimci-iliskileri/yatirimci-takvimi"
+    }
+  ],
+  "warnings": []
+}

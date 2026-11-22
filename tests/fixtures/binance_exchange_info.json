@@ -1,0 +1,11 @@
+{
+  "symbols": [
+    {"symbol": "BTCUSDT", "status": "TRADING", "baseAsset": "BTC", "quoteAsset": "USDT", "isSpotTradingAllowed": true},
+    {"symbol": "ETHUSDT", "status": "TRADING", "baseAsset": "ETH", "quoteAsset": "USDT", "permissions": ["SPOT"]},
+    {"symbol": "BTCFDUSD", "status": "TRADING", "baseAsset": "BTC", "quoteAsset": "FDUSD", "isSpotTradingAllowed": true},
+    {"symbol": "USDCUSDT", "status": "TRADING", "baseAsset": "USDC", "quoteAsset": "USDT", "isSpotTradingAllowed": true},
+    {"symbol": "XRPUSDT", "status": "BREAK", "baseAsset": "XRP", "quoteAsset": "USDT", "isSpotTradingAllowed": true},
+    {"symbol": "SOLUSDT", "status": "TRADING", "baseAsset": "SOL", "quoteAsset": "USDT", "isSpotTradingAllowed": false},
+    {"symbol": "DUPUSDT", "status": "TRADING", "baseAsset": "BTC", "quoteAsset": "USDT", "isSpotTradingAllowed": true}
+  ]
+}
