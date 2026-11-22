@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 BLS_ICS_URL = "https://www.bls.gov/schedule/news_release/bls.ics"
 HEADERS_BLS = {
-    "User-Agent": "FinBot/1.0 (contact: admin@finbot.com)"
+    "User-Agent": "FinBot/1.0"
 }
 
 BLS_EXACT_ALLOWLIST: Dict[str, Tuple[str, str]] = {

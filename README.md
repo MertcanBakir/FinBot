@@ -24,7 +24,7 @@ Provider -> Service -> Repository -> Supabase
            │                         │
            │                         ├── Enstrüman ve son fiyatlar
            │                         ├── Ekonomik/bilanço takvimleri
-           │                         ├── Portföy, FIFO ve snapshot verileri
+           │                         ├── Portföy işlemleri ve snapshot verileri
            │                         └── Job çalışma kayıtları
            ▼
 GitHub Actions + merkezî e-posta bildirimi
@@ -92,17 +92,15 @@ Production state `public.earnings_events` tablosundadır. BIST mali dönem arşi
 
 Supabase portföy altyapısı şunları destekler:
 
-- TRY veya USD bazlı birden fazla portföy
-- BUY ve SELL işlemleri
-- DEPOSIT ve WITHDRAWAL nakit hareketleri
-- İstemci isteği bazında idempotency
-- FIFO lot eşleştirmesi
-- Gerçekleşmiş kâr/zarar
-- Kalan pozisyon ve maliyet
+- TRY veya USD baz para birimiyle birden fazla portföy
+- BUY ve SELL işlemleri; istek bazında tekrar gönderim koruması ve işlem reversal'ı
+- Ağırlıklı ortalama maliyetle pozisyon ve gerçekleşmiş kâr/zarar hesaplama
+- TRY ve USD için kullanıcı tarafından yönetilen nakit bakiyeleri
 - Günlük portföy snapshot'ları
-- Modified Dietz günlük getiri ve zincirlenmiş TWR
-- İşlem ve nakit hareketi reversal akışları
+- Portföy pozisyonu, nakit bakiyesi ve hareketleri için korumalı RPC'ler
 - Kullanıcının yatırım verilerini tek işlemde sıfırlama
+
+Nakit bakiyesi manuel olarak güncellenir; BUY ve SELL işlemleri bu bakiyeyi değiştirmez.
 
 Mobil istemci portföy mutation tablolarına doğrudan yazmamalı; Supabase RPC fonksiyonlarını kullanmalıdır.
 
@@ -424,7 +422,7 @@ Mobil uygulamanın arka plan işlerinin durumunu güvenli ve deterministik izlem
 - Trigger ve SQL yardımcı fonksiyonları
 - RLS policy'leri
 - Portföy mutation/read RPC'leri
-- FIFO ve snapshot hesaplama fonksiyonları
+- Ağırlıklı ortalama maliyet ve snapshot hesaplama fonksiyonları
 - Merkezî job takip şeması
 
 Yeni bir şema değişikliği mevcut migration değiştirilerek değil, ileri yönlü yeni migration eklenerek yapılmalıdır.
@@ -455,56 +453,41 @@ python scripts/export_reference_seed.py
 
 ## Mobil Portföy RPC'leri
 
-Mobil uygulama Anonymous Sign-In sonrasında `authenticated` rolüyle çalışır. RLS, `auth.uid() = portfolios.user_id` kontrolüyle kullanıcıları birbirinden ayırır.
+Mobil uygulama Anonymous Sign-In sonrasında `authenticated` rolüyle çalışır. RLS,
+`auth.uid() = portfolios.user_id` kontrolüyle kullanıcıları birbirinden ayırır.
 
 Temel RPC fonksiyonları:
 
 ```text
 record_portfolio_transaction(...)
-record_cash_flow(...)
 reverse_portfolio_transaction(...)
-reverse_cash_flow(...)
 reset_my_investments(...)
 get_portfolio_positions(...)
-get_portfolio_cash_balances(...)
+get_portfolio_cash(...)
+set_portfolio_cash(...)
+get_portfolio_realized_pnl(...)
+get_my_portfolio_activity(...)
 ```
 
-Ek okuma ve hesaplama fonksiyonları ilgili migration'larda tanımlıdır. RPC'ler:
+RPC'ler portföy sahipliğini doğrular, istemci isteği kimliğiyle yinelenen işlem
+kaydı oluşturulmasını önler ve pozisyon miktarı ile ağırlıklı ortalama maliyeti
+güncel tutar. SELL işlemi mevcut pozisyon miktarını aşamaz. İşlem reversal'ı
+kaydedilmiş işlemi geri alır.
 
-- Portföy sahipliğini doğrular.
-- `client_request_id` ile çift gönderimi engeller.
-- İşlemleri aynı portföy kapsamında kilitler.
-- BUY işleminde ilgili para biriminde yeterli nakit bulunmasını zorunlu tutar.
-- WITHDRAWAL işleminde nakit bakiyesinin negatife düşmesini engeller.
-- Pozisyonu aşan SELL'i reddeder.
-- FIFO eşleştirmesi ve gerçekleşmiş kâr/zararı atomik hesaplar.
-- Hata durumunda bütün değişiklikleri rollback eder.
+Nakit bakiyesi kullanıcı tarafından `set_portfolio_cash(...)` ile ayrı olarak
+güncellenir ve `get_portfolio_cash(...)` ile okunur. BUY/SELL işlemleri nakit
+bakiyesini otomatik değiştirmez.
 
-Yeni bir portföyde TRY ve USD nakit hesapları oluşturulur. Kullanıcı BUY işleminden önce ilgili para biriminde `record_cash_flow(..., DEPOSIT, ...)` ile yeterli nakit yatırmalıdır. Kullanılabilir bakiye `açılış bakiyesi + DEPOSIT - WITHDRAWAL - BUY + SELL` mantığıyla hesaplanır.
-
-`reset_my_investments`, doğru confirmation değeri olmadan çalışmaz. Kullanıcı ve portföy kayıtlarını korur; yatırım hareketlerini, FIFO eşleşmelerini ve snapshot verilerini atomik temizler.
+`reset_my_investments`, doğru confirmation değeri olmadan çalışmaz. Kullanıcı
+ve portföy kayıtlarını korur; yatırım işlemlerini, nakit bakiyelerini, enstrüman
+ilişkilerini ve snapshot verilerini tek işlemde temizler.
 
 ### Portföy Hareketleri RPC (`get_my_portfolio_activity`)
 
-Mobil uygulama, alış/satış işlemleri ile para yatırma/çekme hareketlerini
-`public.get_my_portfolio_activity(...)` üzerinden tek bir kronolojik akışta
-okur. RPC yalnız oturumdaki kullanıcının aktif portföyünü kabul eder; doğrudan
-tablo erişimi açılmaz.
-
-- Sıralama ve sonraki sayfa cursor'ı `occurred_at`, `created_at`,
-  `source_kind`, `activity_id` alanlarının tamamını kullanır.
-- Filtreler `ALL`, `BUY`, `SELL`, `DEPOSIT`, `WITHDRAWAL` ile sınırlıdır.
-- Arama yalnız işlem satırlarının sembol ve şirket adında çalışır; nakit
-  hareketlerine uygulanmaz.
-- İşlem tutarı tarihsel `quantity * unit_price`, nakit tutarı ise kaydedilmiş
-  `amount` değeridir. Güncel fiyat veya döviz kuru kullanılmaz.
-- İptal edilen kayıtlar iptal alanlarıyla görünür; pasif enstrümanların geçmiş
-  işlemleri saklanır.
-
-`reset_my_investments` işlem ve nakit hareketlerini fiziksel olarak sildiği
-için hareket RPC'si reset öncesi geçmişi arşivlemez; yalnız veritabanında kalan
-reset sonrası hareketleri döndürür.
-
+`public.get_my_portfolio_activity(...)` oturumdaki kullanıcının BUY ve SELL
+işlemlerini kronolojik akışta döndürür. Filtreler `ALL`, `BUY` ve `SELL`
+değerleriyle sınırlıdır. İşlem tutarı kaydedilmiş miktar ve birim fiyattan
+hesaplanır; güncel fiyat veya döviz kuru geçmiş hareketi değiştirmez.
 ## Testler
 
 Projenin hedef ve production Python sürümü 3.11'dir. Yerel geliştirme/test

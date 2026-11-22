@@ -4,9 +4,9 @@ from app.services.email_service import EmailService
 
 
 def test_send_email_multipart_alternative_when_html_provided(monkeypatch):
-    monkeypatch.setattr("app.core.config.settings.EMAIL_USER", "test@gmail.com")
+    monkeypatch.setattr("app.core.config.settings.EMAIL_USER", "test@example.com")
     monkeypatch.setattr("app.core.config.settings.EMAIL_APP_PASSWORD", "secret")
-    monkeypatch.setattr("app.core.config.settings.EMAIL_TO", "recipient@gmail.com")
+    monkeypatch.setattr("app.core.config.settings.EMAIL_TO", "recipient@example.com")
 
     service = EmailService()
     assert service.is_configured() is True
@@ -27,15 +27,15 @@ def test_send_email_multipart_alternative_when_html_provided(monkeypatch):
 
         assert success is True
         mock_server.starttls.assert_called_once()
-        mock_server.login.assert_called_once_with("test@gmail.com", "secret")
+        mock_server.login.assert_called_once_with("test@example.com", "secret")
         mock_server.send_message.assert_called_once()
 
         sent_msg = mock_server.send_message.call_args[0][0]
         assert sent_msg.is_multipart() is True
         assert sent_msg.get_content_type() == "multipart/alternative"
         assert sent_msg["Subject"] == subject
-        assert sent_msg["From"] == "test@gmail.com"
-        assert sent_msg["To"] == "recipient@gmail.com"
+        assert sent_msg["From"] == "test@example.com"
+        assert sent_msg["To"] == "recipient@example.com"
 
         payloads = sent_msg.get_payload()
         assert len(payloads) == 2
@@ -52,9 +52,9 @@ def test_send_email_multipart_alternative_when_html_provided(monkeypatch):
 
 
 def test_send_email_plain_text_backward_compatibility(monkeypatch):
-    monkeypatch.setattr("app.core.config.settings.EMAIL_USER", "test@gmail.com")
+    monkeypatch.setattr("app.core.config.settings.EMAIL_USER", "test@example.com")
     monkeypatch.setattr("app.core.config.settings.EMAIL_APP_PASSWORD", "secret")
-    monkeypatch.setattr("app.core.config.settings.EMAIL_TO", "recipient@gmail.com")
+    monkeypatch.setattr("app.core.config.settings.EMAIL_TO", "recipient@example.com")
 
     service = EmailService()
 
@@ -106,9 +106,9 @@ def test_send_email_skipped_when_not_configured(monkeypatch):
 
 def test_send_email_positional_arguments_backward_compatibility(monkeypatch):
     """Verify legacy 5-argument positional call (subject, body, warnings, raw_summary, fetch_time)."""
-    monkeypatch.setattr("app.core.config.settings.EMAIL_USER", "test@gmail.com")
+    monkeypatch.setattr("app.core.config.settings.EMAIL_USER", "test@example.com")
     monkeypatch.setattr("app.core.config.settings.EMAIL_APP_PASSWORD", "secret")
-    monkeypatch.setattr("app.core.config.settings.EMAIL_TO", "recipient@gmail.com")
+    monkeypatch.setattr("app.core.config.settings.EMAIL_TO", "recipient@example.com")
 
     service = EmailService()
 
