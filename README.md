@@ -568,8 +568,9 @@ secret'larla bilinçli olarak çalıştırılmalıdır.
 
 ## Push notifications
 
-Lucrari için özel Supabase tabloları, cihaz/tercih RPC'leri ve bağımsız EC2
-bildirim worker'ı eklendi. V2 tercih sözleşmesi iki kartta yedi ayrı seçeneği destekler:
+Lucrari için özel Supabase tabloları, cihaz/tercih RPC'leri ve Edge Function
+bildirim worker'ı kullanılıyor. Worker Supabase Cron ile her 5 dakikada çalışır;
+eski EC2 bildirim konteyner'ı kaldırıldı. V2 tercih sözleşmesi iki kartta yedi ayrı seçeneği destekler:
 portföy bilanço özeti 10.00, şirket hatırlatmaları 13.30'dan itibaren 15 dakika
 arayla, takip listesi 14.30; genel bilanço takvimi 10.15 ve yarının takvimi 20.00.
 Ekonomik göstergeler için 3 saat, 1 saat ve 15 dakika önce hatırlatma hazırlanır.
@@ -580,4 +581,4 @@ Varsayılan saat dilimi Europe/Istanbul. Mobil kartların arayüzü ayrı entegr
 
 Kurulum, mobil veri sözleşmesi, gönderim sınırları ve yerel PostgreSQL testleri:
 [Push notification sözleşmesi](docs/push-notifications.md).
-Bu kodun eklenmesi canlı bildirimi başlatmaz; migration ve ayrı worker dağıtımı gerekir.
+Canlı worker `refresh_runs` üzerinden izlenir; boş çalışmalarda takip kaydı üretmez.
