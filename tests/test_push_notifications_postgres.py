@@ -16,6 +16,7 @@ from uuid import uuid4
 import psycopg
 import pytest
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 from app.repositories.push_notifications_repository import PushRepository
 
@@ -87,7 +88,17 @@ def cluster(tmp_path_factory):
               CREATE SCHEMA storage;
               CREATE TABLE storage.buckets(id text PRIMARY KEY,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
               CREATE TABLE storage.objects(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),bucket_id text,name text,created_at timestamptz DEFAULT now());
-              ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;""",
+              ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+              CREATE SCHEMA cron;
+              CREATE TABLE cron.job(jobid bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,jobname text UNIQUE,schedule text,command text,active boolean NOT NULL DEFAULT true);
+              CREATE FUNCTION cron.schedule(text,text,text) RETURNS bigint LANGUAGE plpgsql AS $$
+              DECLARE result bigint; BEGIN INSERT INTO cron.job(jobname,schedule,command) VALUES($1,$2,$3) RETURNING jobid INTO result; RETURN result; END $$;
+              CREATE FUNCTION cron.alter_job(job_id bigint,schedule text DEFAULT NULL,command text DEFAULT NULL,database text DEFAULT NULL,username text DEFAULT NULL,active boolean DEFAULT NULL) RETURNS void LANGUAGE plpgsql AS $$
+              BEGIN UPDATE cron.job AS j SET schedule=coalesce($2,j.schedule),command=coalesce($3,j.command),active=coalesce($6,j.active) WHERE j.jobid=$1; END $$;
+              CREATE SCHEMA net;
+              CREATE FUNCTION net.http_post(url text,body jsonb,headers jsonb,params jsonb DEFAULT NULL,timeout_milliseconds integer DEFAULT NULL) RETURNS bigint LANGUAGE sql AS $$ SELECT 1::bigint $$;
+              CREATE SCHEMA vault;
+              CREATE TABLE vault.decrypted_secrets(name text PRIMARY KEY,decrypted_secret text);""",
                 prepare=False,
             )
             files = sorted((ROOT / "supabase/migrations").glob("*.sql"))
@@ -96,7 +107,15 @@ def cluster(tmp_path_factory):
                 if file.name.startswith(("202610", "20261102", "20261119")):
                     # Analysis and separate portfolio redesigns are not notification dependencies.
                     continue
-                conn.execute(file.read_text(), prepare=False)
+                migration_sql = file.read_text()
+                if file.name == "20261123202009_push_notifications_edge_worker.sql":
+                    # This disposable cluster mocks net.http_post; the
+                    # pg_net extension itself is available only on Supabase.
+                    assert "create extension if not exists pg_net;" in migration_sql
+                    migration_sql = migration_sql.replace(
+                        "create extension if not exists pg_net;", "", 1
+                    )
+                conn.execute(migration_sql, prepare=False)
         yield dsn
     finally:
         subprocess.run(
@@ -182,6 +201,213 @@ def test_rpc_auth_isolation_and_privileges(db):
     assert len(rows) == 4 and all(
         r["prosecdef"] and 'search_path=""' in r["proconfig"] for r in rows
     )
+
+
+def test_edge_worker_migration_is_service_role_only_and_cron_starts_disabled(db):
+    conn, _, _, _, _ = db
+    cron = conn.execute(
+        "SELECT jobname,schedule,active FROM cron.job WHERE jobname='finbot-push-notifications-worker'"
+    ).fetchone()
+    assert cron == {
+        "jobname": "finbot-push-notifications-worker",
+        "schedule": "*/5 * * * *",
+        "active": False,
+    }
+    signatures = [
+        "notification_worker_prepare(timestamp with time zone, uuid, text)",
+        "notification_worker_persist(uuid, timestamp with time zone, uuid, text, jsonb)",
+        "notification_worker_due(timestamp with time zone, uuid, text)",
+        "notification_worker_claim(timestamp with time zone, uuid, text, boolean)",
+        "notification_worker_finish(uuid, uuid, timestamp with time zone, text, text, text, uuid, timestamp with time zone, boolean, integer)",
+        "notification_worker_start_tracking(timestamp with time zone, integer)",
+        "notification_worker_finish_tracking(uuid, timestamp with time zone, text, jsonb, text)",
+    ]
+    for signature in signatures:
+        row = conn.execute(
+            """SELECT p.prosecdef,p.proconfig,
+              has_function_privilege('anon',p.oid,'EXECUTE') AS anon_exec,
+              has_function_privilege('authenticated',p.oid,'EXECUTE') AS auth_exec,
+              has_function_privilege('service_role',p.oid,'EXECUTE') AS service_exec,
+              EXISTS(SELECT 1 FROM pg_catalog.aclexplode(coalesce(p.proacl,pg_catalog.acldefault('f',p.proowner))) acl WHERE acl.grantee=0 AND acl.privilege_type='EXECUTE') AS public_exec
+              FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
+              WHERE n.nspname='public' AND p.oid=pg_catalog.to_regprocedure(%s)""",
+            (signature,),
+        ).fetchone()
+        assert row is not None
+        assert row["prosecdef"] is True
+        assert 'search_path=""' in row["proconfig"]
+        assert row["anon_exec"] is False
+        assert row["auth_exec"] is False
+        assert row["service_exec"] is True
+        assert row["public_exec"] is False
+        definition = conn.execute(
+            "SELECT pg_get_functiondef(%s::regprocedure)", (signature,)
+        ).fetchone()["pg_get_functiondef"]
+        assert "request.jwt.claim.role" not in definition
+
+    with pytest.raises(psycopg.errors.InsufficientPrivilege), conn.transaction():
+        conn.execute("SET LOCAL ROLE authenticated")
+        conn.execute(
+            "SELECT public.notification_worker_due(now(),%s,'production')",
+            (uuid4(),),
+        )
+    with pytest.raises(psycopg.errors.InsufficientPrivilege), conn.transaction():
+        conn.execute("SET LOCAL ROLE anon")
+        conn.execute(
+            "SELECT public.notification_worker_due(now(),%s,'production')",
+            (uuid4(),),
+        )
+
+    with conn.transaction():
+        conn.execute("SET LOCAL ROLE service_role")
+        assert conn.execute(
+            "SELECT public.notification_worker_prepare(now(),%s,'production') AS result",
+            (uuid4(),),
+        ).fetchone()["result"]["user_count"] == 0
+
+
+def test_edge_worker_tracking_runs_only_for_due_work_and_finishes(db):
+    conn, _, _, _, _ = db
+    with conn.transaction():
+        conn.execute("SET LOCAL ROLE service_role")
+        conn.execute(
+            "SELECT set_config('request.jwt.claim.role','service_role',true)"
+        )
+        run_id = conn.execute(
+            "SELECT public.notification_worker_start_tracking(now(),2) AS result"
+        ).fetchone()["result"]
+        assert conn.execute(
+            "SELECT public.notification_worker_finish_tracking(%s,now(),'success','{\"processed_count\":2}'::jsonb,NULL) AS result",
+            (run_id,),
+        ).fetchone()["result"] is True
+    row = conn.execute(
+        "SELECT job_name,status,operation_type,scope,metrics->>'prepared_count' prepared_count FROM public.refresh_runs WHERE id=%s",
+        (run_id,),
+    ).fetchone()
+    assert row == {
+        "job_name": "push_notifications_batch",
+        "status": "success",
+        "operation_type": "notification_dispatch",
+        "scope": "PUSH",
+        "prepared_count": "2",
+    }
+    assert conn.execute(
+        "SELECT count(*) n FROM public.provider_run_results WHERE refresh_run_id=%s",
+        (run_id,),
+    ).fetchone()["n"] == 0
+
+
+def test_edge_worker_claim_and_finish_persists_expo_ticket(db):
+    conn, _, user, _, project = db
+    device_id = register(conn, user, project)
+    now = datetime.now(timezone.utc)
+    fresh_source(conn, now)
+    notice_id = conn.execute(
+        """INSERT INTO notifications.outbox(
+          user_id,kind,event_date,event_key,title,body,data,scheduled_at,expires_at
+        ) VALUES(%s,'earnings_today',%s,'daily','Title','Body',
+          '{"count":0,"instrument_ids":[]}'::jsonb,%s,%s) RETURNING id""",
+        (user, now.date(), now, now + timedelta(hours=1)),
+    ).fetchone()["id"]
+    delivery_id = conn.execute(
+        "INSERT INTO notifications.deliveries(notification_id,device_id,next_at) VALUES(%s,%s,%s) RETURNING id",
+        (notice_id, device_id, now),
+    ).fetchone()["id"]
+
+    with conn.transaction():
+        conn.execute("SET LOCAL ROLE service_role")
+        conn.execute(
+            "SELECT set_config('request.jwt.claim.role','service_role',true)"
+        )
+        item = conn.execute(
+            "SELECT public.notification_worker_claim(%s,%s,'production',false) AS result",
+            (now, project),
+        ).fetchone()["result"]
+        assert item["id"] == str(delivery_id)
+        assert item["attempts"] == 1
+        assert item["token"].startswith("ExponentPushToken[")
+        assert conn.execute(
+            """SELECT public.notification_worker_finish(
+              %s,%s,%s,'ticket',NULL,'expo-ticket-1',%s,%s,false,%s) AS result""",
+            (
+                delivery_id,
+                item["lease_token"],
+                now,
+                device_id,
+                item["device_version"],
+                item["attempts"],
+            ),
+        ).fetchone()["result"] is True
+
+    row = conn.execute(
+        "SELECT status,ticket_id,attempts,lease_token,lease_until FROM notifications.deliveries WHERE id=%s",
+        (delivery_id,),
+    ).fetchone()
+    assert row == {
+        "status": "ticket",
+        "ticket_id": "expo-ticket-1",
+        "attempts": 1,
+        "lease_token": None,
+        "lease_until": None,
+    }
+
+
+def test_edge_worker_prepare_reads_sources_for_each_preference_user(db):
+    conn, _, user, _, project = db
+    conn.execute("INSERT INTO notifications.preferences(user_id) VALUES(%s)", (user,))
+    with conn.transaction():
+        conn.execute("SET LOCAL ROLE service_role")
+        conn.execute(
+            "SELECT set_config('request.jwt.claim.role','service_role',true)"
+        )
+        result = conn.execute(
+            "SELECT public.notification_worker_prepare(%s,%s,'production') AS result",
+            (datetime.now(timezone.utc), project),
+        ).fetchone()["result"]
+    assert result["user_count"] == 1
+    prepared_user = result["users"][0]
+    assert prepared_user["user_id"] == str(user)
+    assert prepared_user["portfolios"] == []
+    assert prepared_user["earnings"] == []
+    assert prepared_user["macro"] == []
+    assert prepared_user["snapshot"] is None
+    assert prepared_user["earnings_fresh"] is False
+
+
+def test_edge_worker_persist_is_idempotent_and_binds_devices(db):
+    conn, _, user, _, project = db
+    device_id = register(conn, user, project)
+    now = datetime.now(timezone.utc)
+    item = {
+        "kind": "earnings_today",
+        "event_key": "daily",
+        "title": "Bugünün bilanço takvimi",
+        "body": "Bugün açıklama yok.",
+        "data": {"event_date": now.date().isoformat(), "count": 0},
+        "scheduled_at": now.isoformat(),
+        "expires_at": (now + timedelta(hours=1)).isoformat(),
+    }
+    with conn.transaction():
+        conn.execute("SET LOCAL ROLE service_role")
+        conn.execute(
+            "SELECT set_config('request.jwt.claim.role','service_role',true)"
+        )
+        for _ in range(2):
+            count = conn.execute(
+                "SELECT public.notification_worker_persist(%s,%s,%s,'production',%s) AS result",
+                (user, now, project, Jsonb([item])),
+            ).fetchone()["result"]
+            assert count == 1
+
+    assert conn.execute(
+        "SELECT count(*) n FROM notifications.outbox WHERE user_id=%s",
+        (user,),
+    ).fetchone()["n"] == 1
+    delivery = conn.execute(
+        "SELECT notification_id,device_id,status FROM notifications.deliveries"
+    ).fetchone()
+    assert delivery["device_id"] == device_id
+    assert delivery["status"] == "pending"
 
 
 def fresh_source(conn, now, status="success"):

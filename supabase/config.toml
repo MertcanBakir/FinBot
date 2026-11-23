@@ -15,3 +15,6 @@ sql_paths = ["./seed.sql"]
 enabled = true
 enable_signup = true
 enable_anonymous_sign_ins = true
+
+[functions.push-notifications-worker]
+verify_jwt = false

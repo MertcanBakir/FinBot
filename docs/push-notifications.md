@@ -2,11 +2,11 @@
 
 ## Scope and schedule
 
-This additive feature runs separately from price jobs and FinBotAgents. No
-GitHub workflow or public HTTP server is required. Preparation, sending and Expo
-receipt processing are separate functions in one persistent worker process.
-The worker checks PostgreSQL every 30 seconds. This is not an exact delivery SLA:
-the device may display a push later than the server submits it.
+This additive feature runs separately from price jobs and FinBotAgents. The
+production worker runs through Supabase Cron and an Edge Function every five
+minutes. The EC2 notification container has been removed; other EC2 services
+remain unchanged. This is not an exact delivery SLA: the device may display a
+push later than the server submits it.
 
 Earnings reminders include positive open positions across the user's unarchived
 portfolios, deduplicated by instrument. Monetary daily summaries require exactly
@@ -76,11 +76,9 @@ empty search_path, qualified table references and mandatory `auth.uid()` checks.
 Execute is granted only to authenticated, for exact signatures below. Users
 cannot supply another user ID. Backend DB credentials must never reach Lucrari.
 
-The worker uses the existing trusted `SUPABASE_DATABASE_URL` connection factory
-and explicit transactions. Its current configuration requires the existing
-FinBot trusted database login, not the mobile key or the FinBotAgents NOLOGIN
-role. A separate least-privilege runtime login should be provisioned during
-deployment if those existing broad credentials are not acceptable.
+The Edge worker uses Supabase's server-injected service-role key only for its
+private RPC calls. It does not use the mobile key or a direct database
+connection. Never expose the service-role key to Lucrari.
 
 ## Lucrari integration contract
 
@@ -220,66 +218,68 @@ a newly refreshed token. Only finite safe codes are retained, never raw Expo
 errors. Payloads have expiration timestamps and a conservative byte-size limit.
 See [Expo delivery documentation](https://docs.expo.dev/push-notifications/sending-notifications/).
 
-Non-empty send/receipt batches use `TrackedJobRunner` as
-`push_notifications_batch`, operation `notification_dispatch`, scope `PUSH`.
-Metrics contain counts only; partial/failed/unknown delivery outcomes are visible
-in private tables. Provider child rows are not created. Email alerts are disabled
-for this worker to avoid recurring email storms. Preparation failures log a fixed
-`push_cycle_failed` marker and retry next loop; they currently have no independent
-refresh_runs row. Existing job/email behavior is unchanged.
+Non-empty send/receipt batches use private worker RPCs to record
+`push_notifications_batch` in `refresh_runs`, operation
+`notification_dispatch`, scope `PUSH`. Metrics contain counts only; provider
+child rows are not created. Email alerts are disabled to avoid recurring email
+storms. Idle invocations create no tracking row. A failure after tracking starts
+marks the run failed; earlier preparation failures log a safe marker and retry
+on the next Cron cycle. Existing price and calendar jobs remain unchanged.
 
-## Local validation and deployment handoff
+## Supabase Cron + Edge Function production worker
+
+Migrations `20261123202009_push_notifications_edge_worker.sql` and
+`20261123204131_fix_edge_worker_role_claim_guard.sql` add a
+service-role-only Edge worker API and a five-minute Cron job named
+`finbot-push-notifications-worker`. Production Cron is active on `*/5 * * * *`.
+The EC2 notification container was removed during cutover. Do not run both
+senders at once.
+
+Each Edge invocation prepares eligible notices, processes at most six send or
+receipt actions, records counts in `refresh_runs` only when work is due, and
+exits. Later five-minute invocations drain remaining eligible work. Idle runs
+create no tracking row. This gives up to five minutes of scheduling delay and a
+bounded throughput of 72 actions per hour; monitor pending backlog during
+operation. Other scheduled jobs and their EC2 execution stay unchanged.
+
+The Edge endpoint sets `verify_jwt = false` because Cron cannot provide a user
+JWT. A dedicated `PUSH_WORKER_SECRET` header authenticates Cron using a
+constant-time comparison. The function then calls private worker RPCs with the
+Supabase service role key. Those RPCs revoke execution from `PUBLIC`, `anon`,
+and `authenticated`, grant it only to `service_role`, and set an empty
+`search_path`. The RPCs rely on exact database EXECUTE grants; they do not rely
+on legacy `request.jwt.claim.role` headers, which Supabase secret API keys do
+not guarantee. The migration stores no credentials. Production uses these
+Vault secrets:
+
+| Vault secret name | Value |
+| --- | --- |
+| `push_worker_project_url` | Supabase project URL |
+| `push_worker_publishable_key` | Project publishable/anon API key |
+| `push_worker_secret` | Random secret of at least 32 characters; also set as Edge `PUSH_WORKER_SECRET` |
+
+Set Edge secrets `EXPO_PROJECT_ID` and `PUSH_ENVIRONMENT=production`. Supabase
+provides `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` to the function. Set
+`EXPO_ACCESS_TOKEN` only if Expo enhanced security is enabled. Never commit these
+values or put them in SQL migration text.
+
+The production migration and Edge Function are deployed. Cron runs every five
+minutes and writes tracking rows only when work is due. Monitor Edge Function
+logs and `refresh_runs` for failures. Other EC2 jobs remain active.
+
+Rollback: deactivate only this Cron row. The outbox, delivery records, and
+private RPCs remain in place. Restart an EC2 sender only after Cron is inactive.
+
+## Local validation
 
 ```sh
-PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 venv/bin/pytest -p no:cacheprovider -q
-RUN_PUSH_POSTGRES=1 PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 venv/bin/pytest \
+PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 .venv/bin/pytest -p no:cacheprovider -q
+RUN_PUSH_POSTGRES=1 PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 .venv/bin/pytest \
   -p no:cacheprovider --allow-hosts=127.0.0.1 -q tests/test_push_notifications_postgres.py
 git diff --check
 ```
 
-SQL tests create/stop a temporary local PostgreSQL cluster. They test notification
-migrations against the baseline financial schema, then explicitly remove the
-retired snapshot cash-flow column to verify the production read-query contract.
-This focused test does not redeploy or retest the separate portfolio/analysis
-redesigns, and is not a live scheduler test.
-They do not accept a remote DSN. `TEST_PG_BIN` selects PostgreSQL
-binaries. Existing global test network/DB guards remain in place.
-
-V2 rollout requires pausing the old worker, applying the new migration, deploying
-the new worker image, then resuming. Do not run old and new planners together.
-Pending legacy macro digests are cancelled; ticket receipts remain processable.
-Preference migration preserves the old macro opt-out. Rolling back requires
-keeping the worker paused until an operator resolves v2 preference compatibility;
-do not resume an old planner that generates the retired digest.
-
-Deployment requires a separately approved migration push, dedicated ECR image
-and Expo credential/device smoke test. `Dockerfile.notifications` copies only
-application code and pinned minimal requirements; it excludes `.env` and keys.
-Use a separate ECR repository from FinBotAgents so lifecycle retention cannot
-delete the other application's image. Record the source SHA and image digest.
-
-`compose.notifications.yml` uses project `finbot-notifications`, no inbound
-ports, non-root image, bounded logs/resources and no shared TradingAgents volumes.
-It does not deploy or update FinBotAgents. Keep its private environment file
-outside Git and populate:
-
-```text
-SUPABASE_DATABASE_URL=<FinBot pooler DSN, existing port-6543 contract>
-EXPO_PROJECT_ID=<EAS UUID>
-PUSH_ENVIRONMENT=production
-EXPO_ACCESS_TOKEN=<optional Expo enhanced-security token>
-```
-
-Docker Compose 2.30+ is required for raw env-file handling (credentials are not
-subject to variable interpolation). Host environment must specify `FINBOT_NOTIFICATIONS_IMAGE` as a dedicated image
-digest and `FINBOT_NOTIFICATIONS_ENV_FILE` as the private file's absolute path.
-The worker requires explicit `--apply-db` for writes and real sending; image CMD
-includes it. `--once --apply-db` is **not a dry run**. No CI/CD or AWS modification
-is part of this development. To pause, stop only this Compose service. Existing
-outbox data is retained; restart catches up only inside unexpired windows.
-Application rollback stops this worker; the additive private tables may remain.
-Do not remove populated tables as an automatic rollback or alter earlier SQL.
-
-Before enabling: apply migration, arrange fresh morning calendar/price inputs,
-configure real Expo project credentials, integrate RPCs/tap handling in Lucrari,
-and test on an actual device. Database tests do not validate APNs/FCM credentials.
+SQL tests create and stop a temporary local PostgreSQL cluster. They never use a
+remote DSN. `TEST_PG_BIN` selects PostgreSQL binaries. They verify database
+behavior, not Expo or device display; the production Cron's `net._http_response`
+and Edge logs verify live invocation health.
