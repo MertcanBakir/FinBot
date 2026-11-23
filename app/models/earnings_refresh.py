@@ -69,18 +69,6 @@ class EarningsEventDiff(BaseModel):
     carried_forward_symbols: List[str] = Field(default_factory=list)
 
 
-class BistArchiveRefreshOutcome(BaseModel):
-    archive_status: RefreshStatus = "success"
-    files_created: int = 0
-    files_updated: int = 0
-    events_added: int = 0
-    events_changed: int = 0
-    events_unchanged: int = 0
-    affected_files: List[str] = Field(default_factory=list)
-    warnings: List[str] = Field(default_factory=list)
-    error: Optional[str] = None
-
-
 class OfficialIrProviderSummary(BaseModel):
     symbol: str
     source_provider: str
@@ -134,7 +122,6 @@ class MarketRefreshOutcome(BaseModel):
     healthy_negative_symbol_count: Optional[int] = None
 
     diff: EarningsEventDiff = Field(default_factory=EarningsEventDiff)
-    archive_outcome: Optional[BistArchiveRefreshOutcome] = None
     official_ir_summary: Optional[OfficialIrRefreshSummary] = None
     unavailable_symbols: List[str] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)

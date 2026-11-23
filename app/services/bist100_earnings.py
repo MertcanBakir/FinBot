@@ -23,7 +23,6 @@ from app.providers.earnings.official_ir.registry import (
     official_ir_registry,
 )
 from app.services.bist_reconciliation import (
-    BIST_DAILY_MIN_EARNINGS_DATE,
     reconcile_kap_and_official_ir,
     scope_official_ir_results,
 )
@@ -250,11 +249,11 @@ class Bist100EarningsService:
             else:
                 ir_results = ir_res_raw
 
-            # Scope Official IR results for daily refresh (earnings_date >= 2026-01-01)
+            # Keep provider results within the same rolling window saved to Supabase.
             scoped_ir_results = scope_official_ir_results(
                 ir_results=ir_results,
-                earnings_date_from=BIST_DAILY_MIN_EARNINGS_DATE,
-                earnings_date_to=None
+                earnings_date_from=coverage_start,
+                earnings_date_to=coverage_end,
             )
 
             combined_result = reconcile_kap_and_official_ir(

@@ -1,5 +1,3 @@
-import json
-import os
 from datetime import date, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 from zoneinfo import ZoneInfo
@@ -11,7 +9,7 @@ from app.models.market import EconomicEvent
 from app.providers.calendar.base import CalendarProviderFetchResult
 from app.services.economic_calendar import EconomicCalendarService
 from app.services.economic_calendar_state_store import (
-    JsonEconomicCalendarStateStore,
+    SupabaseEconomicCalendarStateStore,
     merge_partial_economic_calendar,
 )
 
@@ -52,72 +50,22 @@ def _build_test_calendar(
         warnings=warnings or []
     )
 
-def test_cache_save_and_load(tmp_path):
-    state_source = str(tmp_path / "economic_calendar.json")
-    cache = JsonEconomicCalendarStateStore(file_path=state_source)
-
-    cal = _build_test_calendar(
-        provider_results=[EconomicProviderResult(provider_id="TUIK", provider_name="TÜİK", status="success", event_count=1)],
-        events=[
-            EconomicEvent(
-                name="Türkiye TÜFE",
-                country="TR",
-                scheduled_at="2026-09-03T10:00:00+03:00",
-                scheduled_at_istanbul="2026-09-03T10:00:00+03:00",
-                source="TÜİK",
-                provider_id="TUIK",
-                event_code="TR_CPI"
-            )
-        ]
-    )
-
-    save_ok = cache.save(cal)
-    assert save_ok is True
-    assert os.path.exists(state_source)
-
-    loaded = cache.load()
-    assert loaded is not None
-    assert loaded.schema_version == "2.0"
-    assert len(loaded.events) == 1
-    assert loaded.events[0].name == "Türkiye TÜFE"
-
-def test_cache_corrupt_json_returns_none_and_does_not_delete_file(tmp_path):
-    state_source = str(tmp_path / "corrupt_calendar.json")
-    with open(state_source, "w", encoding="utf-8") as f:
-        f.write("{corrupted json text")
-
-    cache = JsonEconomicCalendarStateStore(file_path=state_source)
-    loaded = cache.load()
-    assert loaded is None
-    assert os.path.exists(state_source)  # file must NOT be deleted
-
-def test_cache_wrong_schema_returns_none(tmp_path):
-    state_source = str(tmp_path / "wrong_schema.json")
-    with open(state_source, "w", encoding="utf-8") as f:
-        json.dump({"schema_version": "1.0", "events": []}, f)
-
-    cache = JsonEconomicCalendarStateStore(file_path=state_source)
-    loaded = cache.load()
-    assert loaded is None
-
-def test_cache_is_stale_detection(tmp_path):
-    state_source = str(tmp_path / "economic_calendar.json")
-    cache = JsonEconomicCalendarStateStore(file_path=state_source)
+def test_supabase_store_is_stale_detection():
+    cache = SupabaseEconomicCalendarStateStore()
 
     tz = ZoneInfo("Europe/Istanbul")
     gen_dt = datetime(2026, 8, 15, 7, 30, tzinfo=tz)
     now_dt = datetime(2026, 8, 17, 7, 30, tzinfo=tz)  # 48 hours later
 
     cal = _build_test_calendar(generated_at=gen_dt.isoformat(), coverage_start="2026-08-15")
-    cache.save(cal)
+    cache.stage(cal)
 
     assert cache.is_stale(now_dt, max_age_hours=36.0) is True
     recent_dt = datetime(2026, 8, 15, 17, 30, tzinfo=tz)
     assert cache.is_stale(recent_dt, max_age_hours=36.0) is False
 
-def test_cache_events_between_calculates_dynamic_days_remaining(tmp_path):
-    state_source = str(tmp_path / "economic_calendar.json")
-    cache = JsonEconomicCalendarStateStore(file_path=state_source)
+def test_supabase_store_events_between_calculates_dynamic_days_remaining():
+    cache = SupabaseEconomicCalendarStateStore()
 
     cal = _build_test_calendar(
         coverage_start="2026-08-17",
@@ -127,7 +75,7 @@ def test_cache_events_between_calculates_dynamic_days_remaining(tmp_path):
             EconomicEvent(name="Ev3", country="US", scheduled_at="", scheduled_at_istanbul="2026-08-25T15:30:00+03:00", source="FED", provider_id="FED")
         ]
     )
-    cache.save(cal)
+    cache.stage(cal)
 
     today = date(2026, 8, 17)
     events, warns, loaded_cal = cache.events_between(date(2026, 8, 17), date(2026, 8, 20), as_of=today)

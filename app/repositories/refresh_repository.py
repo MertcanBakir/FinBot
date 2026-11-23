@@ -7,7 +7,6 @@ from zoneinfo import ZoneInfo
 
 from psycopg import Connection
 
-from app.models.earnings import WeeklyEarningsEvent
 from app.models.market import EconomicEvent
 
 
@@ -560,50 +559,6 @@ class RefreshRepository:
                     source_url=source_url,
                     carried_forward=carried_forward,
                     stale=is_stale,
-                )
-            )
-        return events
-
-    @staticmethod
-    def get_weekly_earnings_events(
-        conn: Connection,
-        start_date: date,
-        end_date: date,
-    ) -> List[WeeklyEarningsEvent]:
-        """Fetch active earnings events scheduled between start_date and end_date."""
-        query = """
-            SELECT
-              i.symbol,
-              i.company_name,
-              ee.market,
-              ee.fiscal_year,
-              ee.fiscal_period,
-              ee.earnings_date,
-              ee.session,
-              ee.date_type
-            FROM earnings_events ee
-            JOIN instruments i ON ee.instrument_id = i.id
-            WHERE ee.is_active = true
-              AND ee.earnings_date >= %s
-              AND ee.earnings_date <= %s
-            ORDER BY ee.earnings_date ASC, ee.market ASC, i.symbol ASC;
-        """
-        with conn.cursor() as cur:
-            cur.execute(query, (start_date, end_date))
-            rows = cur.fetchall()
-
-        events: List[WeeklyEarningsEvent] = []
-        for row in rows:
-            events.append(
-                WeeklyEarningsEvent(
-                    symbol=str(row[0]).strip().upper(),
-                    company_name=str(row[1]).strip(),
-                    market=str(row[2]).strip(),
-                    fiscal_year=int(row[3]) if row[3] is not None else None,
-                    fiscal_period=str(row[4]) if row[4] is not None else None,
-                    earnings_date=str(row[5])[:10],
-                    session=str(row[6]) if row[6] is not None else None,
-                    date_type=str(row[7]) if row[7] is not None else None,
                 )
             )
         return events

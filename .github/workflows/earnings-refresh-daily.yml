@@ -42,11 +42,3 @@ jobs:
           SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
         run: |
           python -m app.jobs.earnings_refresh_job
-
-      - name: Preserve BIST Fiscal Period Archive as Workflow Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: bist-fiscal-period-archive-${{ github.run_id }}
-          path: data/generated/earnings/bist100/bist100_*_earnings_calendar.json
-          if-no-files-found: ignore
-          retention-days: 90

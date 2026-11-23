@@ -2,7 +2,7 @@ import asyncio
 import logging
 import sys
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
@@ -15,7 +15,6 @@ from app.models.earnings import (
     Nasdaq100EarningsCalendar,
 )
 from app.models.earnings_refresh import (
-    BistArchiveRefreshOutcome,
     EarningsRefreshJobResult,
     MarketRefreshOutcome,
     OfficialIrProviderSummary,
@@ -31,11 +30,6 @@ from app.services.bist100_earnings import (
     Bist100EarningsService,
     bist100_earnings_service,
 )
-from app.services.bist_fiscal_period_archive import (
-    BistFiscalPeriodArchive,
-    bist_fiscal_period_archive,
-)
-from app.services.bist_reconciliation import BIST_DAILY_MIN_EARNINGS_DATE
 from app.services.calendar_state_store import CalendarStateStore, calendar_state_store
 from app.services.database_refresh_sync import sync_earnings_refresh_to_database
 from app.services.earnings_refresh_report import (
@@ -55,31 +49,9 @@ from app.services.nasdaq100_earnings import (
     Nasdaq100EarningsService,
     nasdaq100_earnings_service,
 )
+from app.services.prepared_refresh_sync import sync_prepared_refresh
 
 logger = logging.getLogger(__name__)
-
-BIST_DAILY_ARCHIVE_MIN_EARNINGS_DATE = BIST_DAILY_MIN_EARNINGS_DATE
-
-
-def filter_daily_archive_events(
-    events: List[BistEarningsEvent],
-    min_earnings_date: date = BIST_DAILY_MIN_EARNINGS_DATE,
-) -> List[BistEarningsEvent]:
-    """Filter normalized BIST earnings events for daily fiscal-period archive upsert.
-
-    Enforces that only events with earnings_date >= min_earnings_date (default 2026-01-01)
-    are written into fiscal period partitions during daily refresh.
-    """
-    filtered: List[BistEarningsEvent] = []
-    for ev in events:
-        try:
-            ev_date = date.fromisoformat(ev.earnings_date)
-            if ev_date >= min_earnings_date:
-                filtered.append(ev)
-        except (ValueError, TypeError) as e:
-            logger.warning("Invalid earnings_date '%s' for event %s (error_type=%s)", ev.earnings_date, ev.symbol, type(e).__name__)
-    return filtered
-
 
 def exit_code_for_result(result: EarningsRefreshJobResult) -> int:
     """Return CLI exit code: 1 if overall_status or database_status is 'failed', 0 otherwise."""
@@ -96,7 +68,6 @@ class EarningsRefreshJob:
         bist_service: Optional[Bist100EarningsService] = None,
         nasdaq_service: Optional[Nasdaq100EarningsService] = None,
         state_store: Optional[CalendarStateStore] = None,
-        fiscal_archive: Optional[BistFiscalPeriodArchive] = None,
         email_service: Optional[EmailService] = None,
         dry_run: bool = False,
         no_email: bool = False,
@@ -105,7 +76,6 @@ class EarningsRefreshJob:
         self.bist_service = bist_service or bist100_earnings_service
         self.nasdaq_service = nasdaq_service or nasdaq100_earnings_service
         self.state_store = state_store or calendar_state_store
-        self.fiscal_archive = fiscal_archive or bist_fiscal_period_archive
         self.email_service = email_service or EmailService()
         self.dry_run = dry_run
         self.no_email = no_email
@@ -141,7 +111,7 @@ class EarningsRefreshJob:
 
         bist_res, nasdaq_res = await asyncio.gather(bist_task, nasdaq_task, return_exceptions=True)
 
-        # 3. Process BIST outcome, rolling state_store save & fiscal period partition archive upsert
+        # 3. Process BIST outcome and rolling state staging
         bist_fetch: Optional[Bist100EarningsCalendar] = None
         bist_fetch_status: RefreshStatus = "failed"
         bist_error: Optional[str] = None
@@ -150,7 +120,6 @@ class EarningsRefreshJob:
         bist_state_preserved = False
         bist_outcome_status: RefreshStatus = "failed"
         final_bist: Optional[Bist100EarningsCalendar] = previous_bist
-        bist_archive_outcome: Optional[BistArchiveRefreshOutcome] = None
 
         if isinstance(bist_res, Exception):
             bist_error = f"BIST refresh service exception: {type(bist_res).__name__}"
@@ -161,93 +130,40 @@ class EarningsRefreshJob:
             else:
                 bist_sync_action = "not_written"
             bist_outcome_status = "failed"
-            bist_archive_outcome = BistArchiveRefreshOutcome(
-                archive_status="failed",
-                error=bist_error,
-                warnings=[f"BIST service exception: {type(bist_res).__name__}"]
-            )
         else:
             # bist_res is Bist100EarningsRefreshBundle
             rolling_cal = bist_res.rolling_calendar
-            raw_fetch_res = bist_res.fetch_result
 
             bist_fetch = rolling_cal
             bist_fetch_status = rolling_cal.status
-            try:
-                save_success = self.state_store.save_bist(rolling_cal)
-                if save_success:
-                    reloaded = self.state_store.load_bist()
-                    if reloaded is None:
-                        bist_sync_action = "write_failed"
-                        bist_outcome_status = "failed"
-                        bist_error = "State reload failed after save_bist returned True"
-                    else:
-                        final_bist = reloaded
-                        bist_state_updated = True
-                        if bist_fetch_status == "success":
-                            bist_sync_action = "replaced"
-                            bist_outcome_status = "success"
-                        else:  # partial
-                            bist_sync_action = "merged_and_updated" if previous_bist else "initial_partial_written"
-                            bist_outcome_status = "partial"
-                else:
-                    if bist_fetch_status == "failed":
-                        bist_outcome_status = "failed"
-                        if previous_bist:
-                            bist_sync_action = "preserved_previous"
-                            bist_state_preserved = True
-                        else:
-                            bist_sync_action = "not_written"
-                    else:  # write failed
-                        bist_sync_action = "write_failed"
-                        bist_outcome_status = "failed"
-                        bist_error = "save_bist returned False for non-failed fetch"
-            except Exception as save_err:
-                logger.error("Error during BIST rolling state_store save (error_type=%s)", type(save_err).__name__)
-                bist_sync_action = "write_failed"
+            if bist_fetch_status == "failed":
                 bist_outcome_status = "failed"
-                bist_error = f"Save exception: {type(save_err).__name__}"
-
-            # Partition archive upsert using filtered 2026+ normalized events from KAP + Official IR
-            try:
-                combined_res = bist_res.combined_result
-                combined_events = combined_res.normalized_events if combined_res else []
-                events_to_upsert = filter_daily_archive_events(
-                    combined_events,
-                    min_earnings_date=BIST_DAILY_ARCHIVE_MIN_EARNINGS_DATE,
-                )
-                arch_upsert = self.fiscal_archive.upsert_events(
-                    events=events_to_upsert,
-                    status=combined_res.status if combined_res else "failed",
-                    generated_at=as_of_dt.isoformat(),
-                    warnings=combined_res.warnings if combined_res else []
-                )
-                bist_archive_outcome = BistArchiveRefreshOutcome(
-                    archive_status=arch_upsert.status,
-                    files_created=arch_upsert.files_created,
-                    files_updated=arch_upsert.files_updated,
-                    events_added=arch_upsert.events_added,
-                    events_changed=arch_upsert.events_changed,
-                    events_unchanged=arch_upsert.events_unchanged,
-                    affected_files=arch_upsert.affected_files,
-                    warnings=arch_upsert.warnings,
-                    error=arch_upsert.error
-                )
-
-                if arch_upsert.status != "success":
-                    if bist_outcome_status == "success":
+                if previous_bist:
+                    bist_sync_action = "preserved_previous"
+                    bist_state_preserved = True
+                else:
+                    bist_sync_action = "not_written"
+            else:
+                try:
+                    final_bist = self.state_store.stage_bist(rolling_cal)
+                    if final_bist is None:
+                        raise RuntimeError("BIST state candidate was not staged")
+                    bist_state_updated = True
+                    if bist_fetch_status == "success":
+                        bist_sync_action = "replaced"
+                        bist_outcome_status = "success"
+                    else:
+                        bist_sync_action = "merged_and_updated" if previous_bist else "initial_partial_written"
                         bist_outcome_status = "partial"
-            except Exception as arch_err:
-                logger.error("Error during BIST partition archive upsert (error_type=%s)", type(arch_err).__name__)
-                bist_archive_outcome = BistArchiveRefreshOutcome(
-                    archive_status="failed",
-                    error=f"Archive exception: {type(arch_err).__name__}",
-                    warnings=[f"Archive exception: {type(arch_err).__name__}"]
-                )
-                if bist_outcome_status == "success":
-                    bist_outcome_status = "partial"
+                except Exception as stage_exc:
+                    logger.error("BIST state staging failed (error_type=%s)", type(stage_exc).__name__)
+                    bist_sync_action = "preserved_previous" if previous_bist else "not_written"
+                    bist_state_preserved = previous_bist is not None
+                    bist_outcome_status = "failed"
+                    bist_error = f"State staging failed: {type(stage_exc).__name__}"
+                    final_bist = previous_bist
 
-        # 4. Process NASDAQ outcome & state_store save
+        # 4. Process NASDAQ outcome & state staging
         nasdaq_fetch: Optional[Nasdaq100EarningsCalendar] = None
         nasdaq_fetch_status: RefreshStatus = "failed"
         nasdaq_error: Optional[str] = None
@@ -269,45 +185,29 @@ class EarningsRefreshJob:
         else:
             nasdaq_fetch = nasdaq_res
             nasdaq_fetch_status = nasdaq_res.status
-            try:
-                save_success = self.state_store.save_nasdaq(nasdaq_res)
-                if save_success:
-                    reloaded = self.state_store.load_nasdaq()
-                    if reloaded is None:
-                        nasdaq_sync_action = "write_failed"
-                        nasdaq_outcome_status = "failed"
-                        nasdaq_error = "State reload failed after save_nasdaq returned True"
+            if nasdaq_fetch_status == "failed" or (nasdaq_fetch_status == "partial" and previous_nasdaq):
+                nasdaq_sync_action = "preserved_previous" if previous_nasdaq else "not_written"
+                nasdaq_state_preserved = previous_nasdaq is not None
+                nasdaq_outcome_status = "partial" if nasdaq_fetch_status == "partial" else "failed"
+            else:
+                try:
+                    final_nasdaq = self.state_store.stage_nasdaq(nasdaq_res)
+                    if final_nasdaq is None:
+                        raise RuntimeError("NASDAQ state candidate was not staged")
+                    nasdaq_state_updated = True
+                    if nasdaq_fetch_status == "success":
+                        nasdaq_sync_action = "replaced"
+                        nasdaq_outcome_status = "success"
                     else:
-                        final_nasdaq = reloaded
-                        nasdaq_state_updated = True
-                        if nasdaq_fetch_status == "success":
-                            nasdaq_sync_action = "replaced"
-                            nasdaq_outcome_status = "success"
-                        else:  # partial initial
-                            nasdaq_sync_action = "initial_partial_written"
-                            nasdaq_outcome_status = "partial"
-                else:
-                    if nasdaq_fetch_status == "partial" and previous_nasdaq:
-                        nasdaq_sync_action = "preserved_previous"
-                        nasdaq_state_preserved = True
+                        nasdaq_sync_action = "initial_partial_written"
                         nasdaq_outcome_status = "partial"
-                        final_nasdaq = previous_nasdaq
-                    elif nasdaq_fetch_status == "failed":
-                        nasdaq_outcome_status = "failed"
-                        if previous_nasdaq:
-                            nasdaq_sync_action = "preserved_previous"
-                            nasdaq_state_preserved = True
-                        else:
-                            nasdaq_sync_action = "not_written"
-                    else:
-                        nasdaq_sync_action = "write_failed"
-                        nasdaq_outcome_status = "failed"
-                        nasdaq_error = "save_nasdaq returned False for non-failed fetch"
-            except Exception as save_err:
-                logger.error("Error during NASDAQ state_store save (error_type=%s)", type(save_err).__name__)
-                nasdaq_sync_action = "write_failed"
-                nasdaq_outcome_status = "failed"
-                nasdaq_error = f"Save exception: {type(save_err).__name__}"
+                except Exception as stage_exc:
+                    logger.error("NASDAQ state staging failed (error_type=%s)", type(stage_exc).__name__)
+                    nasdaq_sync_action = "preserved_previous" if previous_nasdaq else "not_written"
+                    nasdaq_state_preserved = previous_nasdaq is not None
+                    nasdaq_outcome_status = "failed"
+                    nasdaq_error = f"State staging failed: {type(stage_exc).__name__}"
+                    final_nasdaq = previous_nasdaq
 
         # 5. Overall Status Calculation
         if bist_outcome_status == "success" and nasdaq_outcome_status == "success":
@@ -452,7 +352,6 @@ class EarningsRefreshJob:
             scheduled_symbol_count=sum(1 for s in bist_sym_res if s.calendar_status == "scheduled") if bist_sym_res else getattr(bist_fetch, "scheduled_symbol_count", None),
             healthy_negative_symbol_count=sum(1 for s in bist_sym_res if s.calendar_status == "healthy_negative") if bist_sym_res else getattr(bist_fetch, "healthy_negative_symbol_count", None),
             diff=bist_diff,
-            archive_outcome=bist_archive_outcome,
             official_ir_summary=official_ir_summary,
             unavailable_symbols=bist_unavail_syms,
             warnings=list(bist_fetch.warnings) if (bist_fetch and hasattr(bist_fetch, "warnings")) else ([bist_error] if bist_error else []),
@@ -494,30 +393,15 @@ class EarningsRefreshJob:
             email_status="pending"
         )
 
-        # 8. Database Parallel Synchronization (using existing refresh_run_id from TrackedJobRunner)
-        try:
-            db_status, db_error = await asyncio.to_thread(
-                sync_earnings_refresh_to_database,
-                result=result,
-                final_bist=final_bist,
-                final_nasdaq=final_nasdaq,
-                refresh_run_id=context.run_id,
-                dry_run=self.dry_run,
-            )
-            result.database_status = db_status
-            result.database_error = db_error
-            if db_status == "failed":
-                logger.error(f"Database synchronization failed: {db_error}")
-            elif db_status == "success":
-                logger.info("Database synchronization completed successfully.")
-        except AssertionError:
-            raise
-        except Exception as db_err:
-            logger.error(f"Unexpected error during database sync: {type(db_err).__name__}")
-            result.database_status = "failed"
-            result.database_error = f"{type(db_err).__name__}: database synchronization error"
-
-        return result
+        # 8. Persist the prepared state, then complete the result with DB status.
+        return await sync_prepared_refresh(
+            sync_earnings_refresh_to_database,
+            result,
+            final_bist=final_bist,
+            final_nasdaq=final_nasdaq,
+            refresh_run_id=context.run_id,
+            dry_run=self.dry_run,
+        )
 
     async def run(self, as_of: Optional[datetime] = None) -> EarningsRefreshJobResult:
         runner = TrackedJobRunner(

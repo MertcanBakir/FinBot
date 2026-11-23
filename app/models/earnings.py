@@ -30,18 +30,6 @@ class BistEarningsEvent(BaseModel):
         return self
 
 
-class WeeklyEarningsEvent(BaseModel):
-    """Normalized earnings event entry for weekly market summary."""
-
-    symbol: str
-    company_name: str
-    market: str  # "BIST100" or "NASDAQ100"
-    fiscal_year: Optional[int] = None
-    fiscal_period: Optional[str] = None  # "Q1", "Q2", "Q3", "FY"
-    earnings_date: str  # YYYY-MM-DD
-    session: Optional[str] = None  # "pre_market", "after_hours", "time_not_supplied"
-    date_type: Optional[str] = None  # "company_announced", "estimated", etc.
-
 class KapSymbolEarningsStatus(BaseModel):
     symbol: str
     member_resolution_status: str = "resolved"  # resolved / unresolved / ambiguous
@@ -197,42 +185,6 @@ class Nasdaq100EarningsCalendar(BaseModel):
     provider_status: EarningsCalendarStatus = "success"
     events: List[NasdaqEarningsEvent] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
-
-class BistFiscalPeriodEarningsCalendar(BaseModel):
-    schema_version: Literal["2.1"] = "2.1"
-    dataset_type: Literal["fiscal_period_partition"] = "fiscal_period_partition"
-    generated_at: str
-    market: Literal["BIST100"] = "BIST100"
-    fiscal_year: int
-    fiscal_period: FiscalPeriod
-    status: EarningsCalendarStatus = "success"
-    provider_status: EarningsCalendarStatus = "success"
-    events: List[BistEarningsEvent] = Field(default_factory=list)
-    warnings: List[str] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def validate_events(self) -> "BistFiscalPeriodEarningsCalendar":
-        for ev in self.events:
-            if ev.fiscal_year != self.fiscal_year:
-                raise ValueError(f"Event fiscal_year {ev.fiscal_year} does not match partition fiscal_year {self.fiscal_year}")
-            if ev.fiscal_period != self.fiscal_period:
-                raise ValueError(f"Event fiscal_period {ev.fiscal_period} does not match partition fiscal_period {self.fiscal_period}")
-            if not ev.period_start or not ev.period_end or not ev.source_url:
-                raise ValueError(f"Event {ev.symbol} missing required period_start/period_end/source_url for fiscal period partition")
-            if ev.source == "KAP":
-                if not ev.publish_date or ev.disclosure_index is None:
-                    raise ValueError(f"KAP Event {ev.symbol} missing publish_date/disclosure_index")
-                if ev.source_type != "financial_calendar" or ev.date_type != "company_announced":
-                    raise ValueError(f"KAP Event {ev.symbol} has invalid source metadata")
-            elif ev.source == "Official IR":
-                if not ev.source_provider or not ev.source_event_id:
-                    raise ValueError(f"Official IR Event {ev.symbol} missing source_provider/source_event_id")
-                if ev.source_type != "official_financial_calendar" or ev.date_type != "company_announced":
-                    raise ValueError(f"Official IR Event {ev.symbol} has invalid source metadata ({ev.source_type}/{ev.date_type})")
-            else:
-                raise ValueError(f"Event {ev.symbol} has unknown source: {ev.source}")
-        return self
-
 
 class BistEarningsApiResponse(BaseModel):
     schema_version: str = "2.0"

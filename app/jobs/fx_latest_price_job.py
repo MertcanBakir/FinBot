@@ -48,7 +48,7 @@ def run_job(
     )
 
     return runner.run(
-        lambda: _execute_fx_price_job(
+        lambda _ctx: _execute_fx_price_job(
             args=args,
             provider=provider,
             service=service,

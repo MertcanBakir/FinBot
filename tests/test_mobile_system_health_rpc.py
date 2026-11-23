@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Set
 
 MIGRATIONS_DIR = Path(__file__).parent.parent / "supabase" / "migrations"
-MIGRATION_FILE = MIGRATIONS_DIR / "20260829001000_mobile_system_health_rpc.sql"
+MIGRATION_FILE = MIGRATIONS_DIR / "20261123071952_remove_morning_closing_jobs.sql"
 SQL_TEST_FILE = Path(__file__).parent / "sql" / "mobile_system_health_rpc_test.sql"
 JOBS_DIR = Path(__file__).parent.parent / "app" / "jobs"
 
@@ -65,7 +65,7 @@ def extract_catalog_job_names_from_sql(sql_content: str) -> Set[str]:
 
 
 def test_mobile_system_health_migration_timestamp_order():
-    """Verify the migration timestamp is strictly after 20260829000000_add_market_summary_job_type.sql."""
+    """Verify the migration timestamp is the retired market summary jobs migration."""
     assert MIGRATION_FILE.exists(), f"Migration {MIGRATION_FILE} missing"
     assert MIGRATION_FILE.name > "20260829000000_add_market_summary_job_type.sql"
 
@@ -91,13 +91,13 @@ def test_mobile_system_health_returns_table_exact_13_columns():
 
 
 def test_job_names_match_ast_extractions_exact_equality():
-    """Verify that all 10 jobs in Python AST exactly equal the 10 catalog entries in SQL."""
+    """Verify that all 8 jobs in Python AST exactly equal the 8 catalog entries in SQL."""
     ast_jobs = extract_job_names_from_source(JOBS_DIR)
     sql = MIGRATION_FILE.read_text(encoding="utf-8")
     sql_catalog_jobs = extract_catalog_job_names_from_sql(sql)
 
-    assert len(ast_jobs) == 10, f"Expected 10 production jobs in app/jobs/, found {len(ast_jobs)}: {ast_jobs}"
-    assert len(sql_catalog_jobs) == 10, f"Expected 10 catalog jobs in SQL, found {len(sql_catalog_jobs)}: {sql_catalog_jobs}"
+    assert len(ast_jobs) == 8, f"Expected 8 production jobs in app/jobs/, found {len(ast_jobs)}: {ast_jobs}"
+    assert len(sql_catalog_jobs) == 8, f"Expected 8 catalog jobs in SQL, found {len(sql_catalog_jobs)}: {sql_catalog_jobs}"
     assert ast_jobs == sql_catalog_jobs, f"Mismatch between AST jobs {ast_jobs} and SQL catalog jobs {sql_catalog_jobs}"
 
 

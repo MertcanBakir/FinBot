@@ -14,9 +14,6 @@ from app.providers.earnings.official_ir.common import parse_date_flexible
 
 logger = logging.getLogger(__name__)
 
-BIST_DAILY_MIN_EARNINGS_DATE = date(2026, 1, 1)
-
-
 def scope_official_ir_results(
     ir_results: List[OfficialIrProviderResult],
     earnings_date_from: date,

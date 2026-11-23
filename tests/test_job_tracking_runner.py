@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from app.models.job_tracking import (
     DuplicateJobRunError,
+    JobExecutionContext,
     JobRunContext,
     JobRunOutcome,
     JobRunSpecification,
@@ -70,7 +71,7 @@ def test_dry_run_executes_zero_db_writes_and_zero_emails():
 
     executed = False
 
-    def business_fn():
+    def business_fn(_ctx):
         nonlocal executed
         executed = True
         return DummyResult(status="success", count=42)
@@ -113,7 +114,7 @@ def test_successful_run_flow_with_isolated_transactions():
     )
 
     with patch.object(JobTrackingRepository, "get_provider_id_map", return_value={"YAHOO_FINANCE": uuid4()}):
-        res = runner.run(lambda: DummyResult(status="success", count=100), dry_run=False)
+        res = runner.run(lambda _ctx: DummyResult(status="success", count=100), dry_run=False)
 
     assert res.status == "success"
     assert res.email_status is None
@@ -150,7 +151,7 @@ def test_partial_run_sends_alert_and_records_sent_status():
     )
 
     with patch.object(JobTrackingRepository, "get_provider_id_map", return_value={"YAHOO_FINANCE": uuid4()}):
-        res = runner.run(lambda: DummyResult(status="partial", count=80), dry_run=False)
+        res = runner.run(lambda _ctx: DummyResult(status="partial", count=80), dry_run=False)
 
     assert res.status == "partial"
     assert res.email_status == "sent"
@@ -184,7 +185,7 @@ def test_unhandled_exception_recorded_as_failed_in_tracking():
         db_connection_factory=mock_conn_factory,
     )
 
-    def failing_fn():
+    def failing_fn(_ctx):
         raise RuntimeError("Fatal database crash with SecretPass=123")
 
     with patch.object(JobTrackingRepository, "get_provider_id_map", return_value={}):
@@ -263,7 +264,7 @@ def test_runner_fails_closed_on_start_error_and_does_not_execute_business_fn():
 
     executed = False
 
-    def business_fn():
+    def business_fn(_ctx):
         nonlocal executed
         executed = True
         return DummyResult(status="success")
@@ -301,7 +302,7 @@ def test_runner_aborts_safely_on_duplicate_run_error():
 
     executed = False
 
-    def business_fn():
+    def business_fn(_ctx):
         nonlocal executed
         executed = True
         return DummyResult(status="success")
@@ -339,7 +340,7 @@ def test_runner_fails_closed_on_finalize_failure():
     with patch.object(JobTrackingRepository, "start_run", return_value=uuid4()), \
          patch.object(JobTrackingRepository, "finalize_run", return_value=False):
         with pytest.raises(JobTrackingFinalizeError) as exc_info:
-            runner.run(lambda: DummyResult(status="success"), dry_run=False)
+            runner.run(lambda _ctx: DummyResult(status="success"), dry_run=False)
 
     assert "dummy_job" in str(exc_info.value)
 
@@ -384,7 +385,7 @@ def test_economic_adapter_effective_status_failed_on_database_error():
         generated_at="2026-08-28T01:00:00+00:00",
         coverage_start="2026-08-28",
         coverage_end="2026-11-26",
-        state_source="state_store/economic_calendar.json",
+        state_source="supabase://economic_events",
         started_at="2026-08-28T01:00:00+00:00",
         finished_at="2026-08-28T01:01:00+00:00",
         duration_seconds=60.0,
@@ -447,7 +448,7 @@ def test_earnings_adapter_effective_status_failed_on_database_error():
 
 
 def test_business_fn_typeerror_not_retried_and_strictly_called_once():
-    """Verify that if business fn raises TypeError internally, it is called exactly ONCE and not retried with 0 args."""
+    """Verify that an internal TypeError propagates without invoking the business function twice."""
     spec = JobRunSpecification(job_name="bist_latest_prices", operation_type="prices_sync", scope="BIST100", provider_code="YAHOO_FINANCE")
     mock_email = MagicMock()
     mock_email.is_configured.return_value = False
@@ -475,40 +476,34 @@ def test_business_fn_typeerror_not_retried_and_strictly_called_once():
     assert call_count == 1  # Strictly 1 invocation
 
 
-def test_business_fn_signature_inspection_zero_and_kwargs_args():
-    """Verify runner properly invokes business functions taking 0 args, 1 arg, or *args/**kwargs."""
-    spec = JobRunSpecification(job_name="bist_latest_prices", operation_type="prices_sync", scope="BIST100", provider_code="YAHOO_FINANCE")
-    mock_email = MagicMock()
-    mock_email.is_configured.return_value = False
-
+def test_runner_passes_explicit_execution_context_to_business_function():
+    spec = JobRunSpecification(
+        job_name="dummy_job",
+        operation_type="prices_sync",
+        scope="TEST",
+    )
     runner = TrackedJobRunner(
         spec=spec,
         adapter=DummyAdapter(),
         renderer=DummyRenderer(),
-        email_service=mock_email,
-        notification_rule=JobNotificationRule.ALERT_ON_PARTIAL_OR_FAILED,
-        db_connection_factory=create_mock_db_connection,
+        email_service=MagicMock(is_configured=MagicMock(return_value=False)),
+        db_connection_factory=MagicMock(),
     )
 
-    # 1. 0-arg function
-    zero_called = False
-    def zero_arg_fn():
-        nonlocal zero_called
-        zero_called = True
-        return DummyResult(status="success", count=100)
+    received_contexts = []
 
-    runner.run(zero_arg_fn, dry_run=True)
-    assert zero_called is True
+    def business_fn(ctx: JobExecutionContext) -> DummyResult:
+        received_contexts.append(ctx)
+        return DummyResult(status="success")
 
-    # 2. **kwargs function
-    kwargs_called = False
-    def kwargs_fn(**kwargs):
-        nonlocal kwargs_called
-        kwargs_called = True
-        return DummyResult(status="success", count=100)
+    result = runner.run(business_fn, dry_run=True, no_email=True)
 
-    runner.run(kwargs_fn, dry_run=True)
-    assert kwargs_called is True
+    assert result.status == "success"
+    assert len(received_contexts) == 1
+    assert received_contexts[0].run_id is None
+    assert received_contexts[0].dry_run is True
+    assert received_contexts[0].no_email is True
+    assert received_contexts[0].started_at is not None
 
 
 def test_lifecycle_error_boundary_adapter_failure_finalizes_as_failed():
@@ -533,7 +528,7 @@ def test_lifecycle_error_boundary_adapter_failure_finalizes_as_failed():
     with patch.object(JobTrackingRepository, "finalize_run", return_value=True) as mock_finalize, \
          patch.object(JobTrackingRepository, "update_notification_status", return_value=True):
         with pytest.raises(JobTrackingFinalizeError, match="Adapter failed to convert result"):
-            runner.run(lambda: DummyResult(status="success", count=100), dry_run=False)
+            runner.run(lambda _ctx: DummyResult(status="success", count=100), dry_run=False)
 
         assert mock_finalize.called
         outcome = mock_finalize.call_args.kwargs["outcome"]
@@ -560,7 +555,7 @@ def test_lifecycle_error_boundary_notification_policy_failure():
          patch.object(JobTrackingRepository, "finalize_run") as mock_finalize:
         mock_finalize.return_value = True
         with pytest.raises(JobTrackingNotificationError, match="Notification policy evaluation failed"):
-            runner.run(lambda: DummyResult(status="success", count=100), dry_run=False)
+            runner.run(lambda _ctx: DummyResult(status="success", count=100), dry_run=False)
 
         assert mock_finalize.called
         notif_status = mock_finalize.call_args.kwargs["notification_status"]
@@ -587,7 +582,7 @@ def test_notification_persistence_failure_raises_job_tracking_notification_error
     with patch.object(JobTrackingRepository, "update_notification_status", return_value=False):
         with pytest.raises(JobTrackingNotificationError, match="Failed to record notification status"):
             runner.run(
-                lambda: DummyResult(status="partial", count=85),
+                lambda _ctx: DummyResult(status="partial", count=85),
                 dry_run=False,
             )
 
@@ -625,7 +620,7 @@ def test_end_to_end_secret_sanitization_no_leak_in_logs_sql_email(caplog):
          patch.object(JobTrackingRepository, "update_notification_status", return_value=True):
         mock_finalize.return_value = True
         with caplog.at_level("DEBUG"):
-            runner.run(lambda: DummyResult(status="failed", count=0), dry_run=False)
+            runner.run(lambda _ctx: DummyResult(status="failed", count=0), dry_run=False)
 
         # 1. Verify caplog has no secrets
         for record in caplog.records:
@@ -676,7 +671,7 @@ async def test_adapter_failure_sync_and_async_raises_job_tracking_finalize_error
     )
 
     business_fn_calls = 0
-    def business_fn():
+    def business_fn(_ctx):
         nonlocal business_fn_calls
         business_fn_calls += 1
         return DummyResult(status="success", count=100)
@@ -696,7 +691,7 @@ async def test_adapter_failure_sync_and_async_raises_job_tracking_finalize_error
 
     # 2. Async runner raises JobTrackingFinalizeError
     async_business_calls = 0
-    async def async_business_fn():
+    async def async_business_fn(_ctx):
         nonlocal async_business_calls
         async_business_calls += 1
         return DummyResult(status="success", count=100)
@@ -880,7 +875,7 @@ def test_stateful_transaction_rollback_and_compensation_lifecycle(caplog):
     )
 
     business_fn_calls = 0
-    def business_fn():
+    def business_fn(_ctx):
         nonlocal business_fn_calls
         business_fn_calls += 1
         return DummyResult(status="success", count=10)
@@ -965,7 +960,7 @@ def test_compensation_finalize_run_returns_false_logs_warning_and_raises(caplog)
         
         with caplog.at_level("DEBUG"):
             with pytest.raises(JobTrackingFinalizeError, match="Failed to finalize tracked job"):
-                runner.run(lambda: DummyResult(status="success", count=10), dry_run=False)
+                runner.run(lambda _ctx: DummyResult(status="success", count=10), dry_run=False)
 
     assert "Failed to apply compensation transaction" in caplog.text
     assert "Applied compensation transaction" not in caplog.text
@@ -1001,7 +996,7 @@ def test_compensation_connection_completely_fails_logs_safely_and_sends_email_be
         
         with caplog.at_level("DEBUG"):
             with pytest.raises(JobTrackingFinalizeError, match="Failed to finalize tracked job"):
-                runner.run(lambda: DummyResult(status="success", count=10), dry_run=False)
+                runner.run(lambda _ctx: DummyResult(status="success", count=10), dry_run=False)
 
     assert mock_email.send_email.call_count == 1
     assert "Compensation transaction DB write failed for 'calendar_refresh'" in caplog.text
@@ -1035,7 +1030,7 @@ def test_compensation_email_send_returns_false_sets_notification_status_failed()
          patch.object(JobTrackingRepository, "upsert_provider_results", side_effect=lambda conn, run_id, outcomes: store.upsert_provider_results(run_id, outcomes)):
         
         with pytest.raises(JobTrackingFinalizeError, match="Failed to finalize tracked job"):
-            runner.run(lambda: DummyResult(status="success", count=10), dry_run=False)
+            runner.run(lambda _ctx: DummyResult(status="success", count=10), dry_run=False)
 
     run_row = next(iter(store.committed_runs.values()))
     assert run_row["status"] == "failed"
@@ -1070,7 +1065,7 @@ def test_compensation_email_not_configured_sets_status_not_configured():
          patch.object(JobTrackingRepository, "upsert_provider_results", side_effect=lambda conn, run_id, outcomes: store.upsert_provider_results(run_id, outcomes)):
         
         with pytest.raises(JobTrackingFinalizeError, match="Failed to finalize tracked job"):
-            runner.run(lambda: DummyResult(status="success", count=10), dry_run=False)
+            runner.run(lambda _ctx: DummyResult(status="success", count=10), dry_run=False)
 
     run_row = next(iter(store.committed_runs.values()))
     assert run_row["status"] == "failed"
@@ -1105,7 +1100,7 @@ def test_compensation_no_email_flag_sets_status_disabled():
          patch.object(JobTrackingRepository, "upsert_provider_results", side_effect=lambda conn, run_id, outcomes: store.upsert_provider_results(run_id, outcomes)):
         
         with pytest.raises(JobTrackingFinalizeError, match="Failed to finalize tracked job"):
-            runner.run(lambda: DummyResult(status="success", count=10), dry_run=False, no_email=True)
+            runner.run(lambda _ctx: DummyResult(status="success", count=10), dry_run=False, no_email=True)
 
     run_row = next(iter(store.committed_runs.values()))
     assert run_row["status"] == "failed"
@@ -1117,15 +1112,12 @@ def test_compensation_no_email_flag_sets_status_disabled():
 async def test_economic_calendar_production_execution_path_secret_sanitization(caplog, tmp_path):
     """Verify that exceptions with DSN, password, and tokens in real economic calendar job flow are never leaked."""
     from app.jobs.economic_calendar_refresh_job import EconomicCalendarRefreshJob
-    from app.services.economic_calendar_state_store import (
-        JsonEconomicCalendarStateStore,
-    )
+    from tests.state_store_fakes import MemoryEconomicCalendarStateStore
 
     secret_dsn = "postgresql://prod_user:SecretEcoPassword999@db.prod.internal:5432/finbot"
     secret_token = "ghp_" + "SecretEcoTokenABC123456789"
 
-    cache_path = tmp_path / "economic_calendar.json"
-    mock_cache = JsonEconomicCalendarStateStore(file_path=str(cache_path))
+    mock_cache = MemoryEconomicCalendarStateStore()
     mock_service = MagicMock()
     mock_service.providers = []
     mock_service.get_rolling_calendar = AsyncMock(
@@ -1183,12 +1175,12 @@ async def test_economic_calendar_production_execution_path_secret_sanitization(c
 async def test_earnings_production_execution_path_secret_sanitization(caplog, tmp_path):
     """Verify that exceptions with DSN, password, and tokens in real earnings job flow are never leaked."""
     from app.jobs.earnings_refresh_job import EarningsRefreshJob
-    from app.services.calendar_state_store import JsonCalendarStateStore
+    from tests.state_store_fakes import MemoryCalendarStateStore
 
     secret_dsn = "postgresql://earn_user:SecretEarnPassword777@db.supabase.co:5432/finbot"
     secret_token = "ghp_" + "SecretEarnTokenXYZ987654321"
 
-    mock_cache = JsonCalendarStateStore(cache_dir=str(tmp_path))
+    mock_cache = MemoryCalendarStateStore()
     mock_bist_svc = MagicMock()
     mock_bist_svc.get_refresh_bundle = AsyncMock(
         side_effect=RuntimeError(f"Connection refused to {secret_dsn} with auth {secret_token}")
@@ -1271,18 +1263,18 @@ def test_deterministic_email_status_mapping():
     )
 
     with patch.object(JobTrackingRepository, "finalize_run", return_value=True):
-        res = runner.run(lambda: DummyResult(status="success", count=100), dry_run=False)
+        res = runner.run(lambda _ctx: DummyResult(status="success", count=100), dry_run=False)
         assert res.email_status is None
 
     # Case 2: disabled (no_email=True) -> email_status should be skipped_no_email
     with patch.object(JobTrackingRepository, "finalize_run", return_value=True):
-        res = runner.run(lambda: DummyResult(status="failed", count=0), dry_run=False, no_email=True)
+        res = runner.run(lambda _ctx: DummyResult(status="failed", count=0), dry_run=False, no_email=True)
         assert res.email_status == "skipped_no_email"
 
     # Case 3: not_configured (email not configured) -> email_status should be skipped_not_configured
     mock_email.is_configured.return_value = False
     with patch.object(JobTrackingRepository, "finalize_run", return_value=True):
-        res = runner.run(lambda: DummyResult(status="failed", count=0), dry_run=False)
+        res = runner.run(lambda _ctx: DummyResult(status="failed", count=0), dry_run=False)
         assert res.email_status == "skipped_not_configured"
 
 
@@ -1435,7 +1427,7 @@ def test_tx_c_atomicity_finalization_and_provider_upsert_rollback_together():
     )
 
     business_calls = 0
-    def business_fn():
+    def business_fn(_ctx):
         nonlocal business_calls
         business_calls += 1
         return DummyResult(status="success", count=10)
@@ -1480,7 +1472,7 @@ def test_tx_d_notification_commits_in_separate_isolated_transaction():
          patch.object(JobTrackingRepository, "finalize_run", side_effect=lambda conn, run_id, outcome, notification_status="not_required", notification_error=None, notified_at=None: store.finalize_run(run_id, outcome, notification_status, notification_error, notified_at)), \
          patch.object(JobTrackingRepository, "update_notification_status", side_effect=lambda conn, run_id, status, error=None, notified_at=None: store.update_notification_status(run_id, status, error, notified_at)):
 
-        res = runner.run(lambda: DummyResult(status="failed", count=0), dry_run=False)
+        res = runner.run(lambda _ctx: DummyResult(status="failed", count=0), dry_run=False)
 
     # 3 transactions: Tx A (start_run), Tx C (finalize_run), Tx D (update_notification_status)
     assert store.transactions_opened == 3
@@ -1514,7 +1506,7 @@ async def test_async_runner_commits_tx_a_and_tx_c_in_explicit_transactions():
     observed_in_db = False
     observed_run_id = None
 
-    async def async_business_fn(exec_ctx):
+    async def async_business_fn(exec_ctx: JobExecutionContext) -> DummyResult:
         nonlocal observed_in_db, observed_run_id
         observed_run_id = exec_ctx.run_id
         if exec_ctx.run_id in store.committed_runs and store.committed_runs[exec_ctx.run_id]["status"] == "running":

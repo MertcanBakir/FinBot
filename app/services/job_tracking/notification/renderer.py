@@ -6,7 +6,6 @@ from app.models.crypto_prices import BinanceCryptoPricesJobResult
 from app.models.earnings_refresh import EarningsRefreshJobResult
 from app.models.economic_calendar_refresh import EconomicCalendarRefreshJobResult
 from app.models.fx_prices import FxPriceJobResult
-from app.models.market_summary_job import MarketSummaryJobResult
 from app.models.nasdaq_prices import NasdaqPricesJobResult
 from app.models.portfolio_snapshots import PortfolioSnapshotJobResult
 from app.models.tefas_prices import TefasPricesJobResult
@@ -124,24 +123,4 @@ class PortfolioSnapshotEmailRenderer(JobEmailRenderer[PortfolioSnapshotJobResult
         subject = format_portfolio_snapshots_subject(result)
         body_text = format_portfolio_snapshots_email_text(result)
         body_html = format_portfolio_snapshots_email_html(result)
-        return subject, body_text, body_html
-
-
-class MarketSummaryEmailRenderer(JobEmailRenderer[MarketSummaryJobResult]):
-    """Renderer for Morning and Closing Market Summary jobs using pre-rendered email content."""
-
-    def render(self, result: MarketSummaryJobResult) -> Tuple[str, str, Optional[str]]:
-        title = "Sabah" if result.report_type == "morning" else "Kapanış"
-        default_subject = f"[FinBot] {title} Piyasa Özeti — {result.status.upper()}"
-        default_body_text = (
-            f"FinBot {title} Piyasa Özeti\n"
-            f"Rapor Tipi: {result.report_type}\n"
-            f"Durum: {result.status.upper()}\n"
-            f"Hata: {result.error or '-'}"
-        )
-
-        subject = result.subject or default_subject
-        body_text = result.body_text or default_body_text
-        body_html = result.body_html
-
         return subject, body_text, body_html

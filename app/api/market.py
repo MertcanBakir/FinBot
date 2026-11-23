@@ -3,40 +3,14 @@ from typing import Any, Dict, List
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import PlainTextResponse
 
 from app.core.config import settings
-from app.models.market import BistMovers, MarketSnapshot
-from app.services.bist_movers import bist_movers_service
 from app.services.economic_calendar_state_store import economic_calendar_state_store
-from app.services.market_summary import market_summary_service
 
-router = APIRouter(prefix="/api", tags=["Market"])
+router = APIRouter(prefix="/api", tags=["Economic Calendar"])
 
 def _dedupe_warnings(warnings_list: List[str]) -> List[str]:
     return list(dict.fromkeys(w.strip() for w in warnings_list if w and w.strip()))
-
-@router.get(
-    "/market-summary",
-    response_model=MarketSnapshot,
-    summary="Get Market Summary",
-    description="Returns current market snapshot. Use ?format=text for plain text output. Does NOT send emails."
-)
-async def get_market_summary(format: str = Query("json", description="Response format: 'json' or 'text'")):
-    snapshot = await market_summary_service.generate()
-    if format.lower() == "text":
-        return PlainTextResponse(content=snapshot.text, media_type="text/plain; charset=utf-8")
-    return snapshot
-
-@router.get(
-    "/bist-movers",
-    response_model=BistMovers,
-    summary="Get Top BIST 100 Movers",
-    description="Returns top 3 gainers and top 3 losers among BIST 100 components. Does NOT send emails."
-)
-async def get_bist_movers():
-    movers, _ = await bist_movers_service.get_movers()
-    return movers
 
 @router.get(
     "/economic-calendar/today",

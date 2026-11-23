@@ -226,18 +226,12 @@ def collect_earnings_refresh_alerts(result: EarningsRefreshJobResult) -> List[st
             for w in p.warnings:
                 add(w)
 
-    # 3. Archive errors & warnings
-    if result.bist.archive_outcome:
-        add(result.bist.archive_outcome.error)
-        for w in result.bist.archive_outcome.warnings:
-            add(w)
-
-    # 4. NASDAQ errors & warnings
+    # 3. NASDAQ errors & warnings
     add(result.nasdaq.error)
     for w in result.nasdaq.warnings:
         add(w)
 
-    # 5. Database errors
+    # 4. Database errors
     if result.database_status == "failed":
         add(f"Supabase veritabanı senkronizasyonu başarısız: {result.database_error}" if result.database_error else "Supabase veritabanı senkronizasyonu başarısız.")
 
@@ -729,11 +723,6 @@ def build_earnings_refresh_email_view(result: EarningsRefreshJobResult) -> Dict[
     bist_changes_str = f"{bist_diff.added_count} yeni • {bist_diff.changed_count} değişen • {bist_diff.removed_count} kaldırılan"
     bist_sync_action_str = humanize_sync_action(bist.sync_action)
 
-    bist_archive_str = ""
-    if bist.archive_outcome and (bist.archive_outcome.files_created > 0 or bist.archive_outcome.files_updated > 0):
-        tot_arch = bist.archive_outcome.files_created + bist.archive_outcome.files_updated
-        bist_archive_str = f"Arşivde {tot_arch} dönem dosyası güncellendi"
-
     # NASDAQ100 Card Data
     nasdaq_diff = nasdaq.diff
     nasdaq_events_str = f"{nasdaq_diff.final_event_count} bilanço etkinliği"
@@ -854,7 +843,6 @@ def build_earnings_refresh_email_view(result: EarningsRefreshJobResult) -> Dict[
             "metrics_available": bist_metrics_available,
             "changes_str": bist_changes_str,
             "sync_action_str": bist_sync_action_str,
-            "archive_str": bist_archive_str,
             "unavailable_symbols": bist.unavailable_symbols,
             "state_preserved": bist.state_preserved,
             "status": bist.outcome_status,
@@ -954,8 +942,6 @@ def format_earnings_refresh_email_html(result: EarningsRefreshJobResult) -> str:
         html_lines.append(f'                  <div style="font-size: 12px; color: #6B7280; margin-bottom: 6px;">({esc(bist_c["healthy_str"])})</div>')
     html_lines.append(f'                  <div style="font-size: 12px; font-weight: 600; color: #1F2937; margin-top: 6px;">{esc(bist_c["changes_str"])}</div>')
     html_lines.append(f'                  <div style="font-size: 12px; color: #4B5563; margin-top: 8px; background-color: #FFFFFF; padding: 4px 8px; border-radius: 4px; border: 1px solid #E5E7EB; display: inline-block;">{esc(bist_c["sync_action_str"])}</div>')
-    if bist_c["archive_str"]:
-        html_lines.append(f'                  <div style="font-size: 12px; color: #059669; margin-top: 6px;">✓ {esc(bist_c["archive_str"])}</div>')
     if bist_c["unavailable_symbols"]:
         unavail_str = ", ".join(bist_c["unavailable_symbols"])
         html_lines.append(f'                  <div style="font-size: 12px; color: #DC2626; margin-top: 6px;">⚠️ Kontrol edilemeyen: {esc(unavail_str)}</div>')
@@ -1155,8 +1141,6 @@ def format_earnings_refresh_email_text(result: EarningsRefreshJobResult) -> str:
         lines.append(f"• {bist_c['healthy_str']}")
     lines.append(f"• Değişiklikler: {bist_c['changes_str']}")
     lines.append(f"• Durum: {bist_c['sync_action_str']}")
-    if bist_c["archive_str"]:
-        lines.append(f"• Arşiv: {bist_c['archive_str']}")
     if bist_c["unavailable_symbols"]:
         lines.append(f"• Kontrol Edilemeyen Semboller: {', '.join(bist_c['unavailable_symbols'])}")
     lines.append("")

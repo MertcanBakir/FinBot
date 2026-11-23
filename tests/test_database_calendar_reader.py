@@ -52,9 +52,8 @@ def _cursor_context(*, one=None, all_rows=None, query_tracker=None):
 
 
 def test_production_calendar_facades_are_supabase_backed():
-    assert SupabaseCalendarStateStore.bist_file_path.startswith("supabase://")
-    assert SupabaseCalendarStateStore.nasdaq_file_path.startswith("supabase://")
-    assert SupabaseEconomicCalendarStateStore().file_path.startswith("supabase://")
+    assert SupabaseCalendarStateStore.state_source.startswith("supabase://")
+    assert SupabaseEconomicCalendarStateStore().state_source.startswith("supabase://")
 
 
 def test_canonical_job_names_contract():

@@ -37,4 +37,4 @@ def tracked_batch(fn, db_connection_factory=None):
         db_connection_factory=db_connection_factory,
     )
     # Do not send an email every minute on an outage. Delivery state stays in DB.
-    return runner.run(fn, dry_run=False, no_email=True)
+    return runner.run(lambda _ctx: fn(), dry_run=False, no_email=True)

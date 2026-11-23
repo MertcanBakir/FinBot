@@ -44,14 +44,12 @@ SyncAction = Literal[
     "not_written",
 ]
 
-TriggerType = Literal["scheduled", "manual", "backfill"]
+TriggerType = Literal["scheduled", "manual"]
 
 OperationType = Literal[
     "prices_sync",
     "calendar_refresh",
     "portfolio_snapshot",
-    "archive_backfill",
-    "market_summary",
     "notification_dispatch",
 ]
 

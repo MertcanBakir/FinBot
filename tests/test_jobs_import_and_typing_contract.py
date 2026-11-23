@@ -19,8 +19,6 @@ PRODUCTION_JOB_MODULES = [
     "app.jobs.portfolio_snapshots_job",
     "app.jobs.economic_calendar_refresh_job",
     "app.jobs.earnings_refresh_job",
-    "app.jobs.morning_job",
-    "app.jobs.closing_job",
 ]
 
 
@@ -77,7 +75,7 @@ def test_job_files_ast_annotations_statically_defined(module_path: Path):
 
 
 @pytest.mark.parametrize("mod_name", PRODUCTION_JOB_MODULES)
-def test_all_10_production_jobs_import_and_type_hints_resolvable(mod_name: str):
+def test_all_8_production_jobs_import_and_type_hints_resolvable(mod_name: str):
     """Import each production job module and explicitly evaluate typing.get_type_hints on all functions and classes."""
     mod = importlib.import_module(mod_name)
     assert mod is not None

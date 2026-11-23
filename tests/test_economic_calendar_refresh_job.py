@@ -6,7 +6,6 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.jobs.economic_calendar_refresh_job import (
-    STATE_WRITE_FAILED_WARNING,
     EconomicCalendarRefreshJob,
     calculate_economic_diff,
     exit_code_for_result,
@@ -19,9 +18,9 @@ from app.models.economic_calendar_refresh import (
     EconomicProviderRefreshOutcome,
 )
 from app.models.market import EconomicEvent
-from app.services.economic_calendar_state_store import JsonEconomicCalendarStateStore
 from app.services.economic_event_identity import economic_provider_key
 from tests.conftest import create_mock_db_connection
+from tests.state_store_fakes import MemoryEconomicCalendarStateStore
 
 
 @pytest.fixture(autouse=True)
@@ -81,11 +80,10 @@ def _build_test_calendar(
     )
 
 @pytest.mark.asyncio
-async def test_job_full_failure_with_previous_cache_has_matching_carried_diff(tmp_path):
-    state_source = str(tmp_path / "test_calendar.json")
-    state_store = JsonEconomicCalendarStateStore(file_path=state_source)
+async def test_job_full_failure_with_previous_state_has_matching_carried_diff():
+    state_store = MemoryEconomicCalendarStateStore()
 
-    # Prepopulate previous valid state_store with 1 event in coverage
+    # Seed the previous Supabase state for this isolated job test.
     prev_cal = _build_test_calendar(
         status="success",
         generated_at="2026-08-16T07:30:00+03:00",
@@ -97,9 +95,7 @@ async def test_job_full_failure_with_previous_cache_has_matching_carried_diff(tm
             EconomicEvent(name="Türkiye TÜFE", country="TR", scheduled_at="", scheduled_at_istanbul="2026-09-03T10:00:00+03:00", source="TÜİK", provider_id="TUIK")
         ]
     )
-    state_store.save(prev_cal)
-    with open(state_source, "rb") as f:
-        prev_bytes = f.read()
+    state_store.stage(prev_cal)
 
     tz_tr = ZoneInfo("Europe/Istanbul")
     today_dt = datetime(2026, 8, 17, 7, 30, tzinfo=tz_tr)
@@ -135,39 +131,7 @@ async def test_job_full_failure_with_previous_cache_has_matching_carried_diff(tm
     assert res.diff.removed_count == 0
     assert res.diff.added_count == 0
 
-    # Ensure previous state_store file on disk was preserved byte-identical
-    with open(state_source, "rb") as f:
-        final_bytes = f.read()
-    assert final_bytes == prev_bytes
-
-@pytest.mark.asyncio
-async def test_job_save_failure_with_no_previous_cache_reports_zero_persisted(tmp_path):
-    state_source = str(tmp_path / "test_calendar.json")
-    state_store = JsonEconomicCalendarStateStore(file_path=state_source)
-
-    mock_service = MagicMock()
-    mock_service.get_rolling_calendar = AsyncMock(return_value=_build_test_calendar(
-        status="success",
-        events=[
-            EconomicEvent(name="Türkiye TÜFE", country="TR", scheduled_at="", scheduled_at_istanbul="2026-09-03T10:00:00+03:00", source="TÜİK", provider_id="TUIK")
-        ]
-    ))
-
-    mock_email = MagicMock()
-    mock_email.is_configured.return_value = False
-
-    job = EconomicCalendarRefreshJob(service=mock_service, state_store=state_store, email_service=mock_email)
-
-    with patch.object(state_store, "save", return_value=False):
-        res = await job.run()
-
-        assert res.status == "failed"
-        assert res.sync_action == "write_failed"
-        assert exit_code_for_result(res) == 1
-        assert res.diff.final_event_count == 0
-        assert res.diff.added_count == 0
-        assert res.provider_outcomes[0].event_count == 1
-        assert not os.path.exists(state_source)
+    assert state_store.load() == prev_cal
 
 @pytest.mark.asyncio
 async def test_identical_bea_fixture_diff_yields_zero_changed():
@@ -244,9 +208,8 @@ async def test_bea_second_estimate_reschedule_detected_as_changed():
 
 
 @pytest.mark.asyncio
-async def test_job_dry_run_no_email_does_not_save_and_skips_email(tmp_path):
-    state_source = str(tmp_path / "test_calendar.json")
-    state_store = JsonEconomicCalendarStateStore(file_path=state_source)
+async def test_job_dry_run_no_email_does_not_stage_and_skips_email():
+    state_store = MemoryEconomicCalendarStateStore()
 
     mock_service = MagicMock()
     mock_service.get_rolling_calendar = AsyncMock(return_value=_build_test_calendar(
@@ -265,14 +228,13 @@ async def test_job_dry_run_no_email_does_not_save_and_skips_email(tmp_path):
     assert res.sync_action == "dry_run"
     assert res.email_sent is False
     assert res.email_status == "skipped_dry_run"
-    assert not os.path.exists(state_source)
+    assert state_store.load() is None
     mock_email.send_email.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_job_rule_c_empty_partial_fails_and_does_not_write_cache(tmp_path):
-    state_source = str(tmp_path / "test_calendar.json")
-    state_store = JsonEconomicCalendarStateStore(file_path=state_source)
+async def test_job_rule_c_empty_partial_fails_without_staging():
+    state_store = MemoryEconomicCalendarStateStore()
 
     mock_service = MagicMock()
     # 4 providers failed, 1 returned 0 events
@@ -294,7 +256,7 @@ async def test_job_rule_c_empty_partial_fails_and_does_not_write_cache(tmp_path)
     assert res.status == "failed"
     assert res.sync_action == "not_written"
     assert exit_code_for_result(res) == 1
-    assert not os.path.exists(state_source)
+    assert state_store.load() is None
 
 
 def test_validate_smoke_quality_gate_all_success():
@@ -305,7 +267,7 @@ def test_validate_smoke_quality_gate_all_success():
         coverage_end="2026-11-15",
         status="success",
         sync_action="dry_run",
-        state_source="data/generated/economic_calendar.json",
+        state_source="supabase://economic_events",
         diff=EconomicEventDiff(fetched_event_count=5, final_event_count=5),
         provider_outcomes=[
             EconomicProviderRefreshOutcome(provider_id="TUIK", provider_name="TÜİK", status="success", structure_validated=True, event_count=1),
@@ -329,7 +291,7 @@ def test_validate_smoke_quality_gate_rejects_partial_or_failure():
         coverage_end="2026-11-15",
         status="partial",
         sync_action="dry_run",
-        state_source="data/generated/economic_calendar.json",
+        state_source="supabase://economic_events",
         diff=EconomicEventDiff(fetched_event_count=4, final_event_count=4),
         provider_outcomes=[
             EconomicProviderRefreshOutcome(provider_id="TUIK", provider_name="TÜİK", status="success", structure_validated=True, event_count=1),
@@ -356,7 +318,7 @@ def test_email_status_serialization_all_literal_values():
             coverage_end="2026-11-15",
             status="success",
             sync_action="dry_run",
-            state_source="data/generated/economic_calendar.json",
+            state_source="supabase://economic_events",
             diff=EconomicEventDiff(),
             email_status=st
         )
@@ -374,7 +336,7 @@ def test_smoke_gate_rejects_event_count_loss():
         coverage_end="2026-11-15",
         status="success",
         sync_action="dry_run",
-        state_source="data/generated/economic_calendar.json",
+        state_source="supabase://economic_events",
         diff=EconomicEventDiff(fetched_event_count=34, final_event_count=34),
         provider_outcomes=[
             EconomicProviderRefreshOutcome(provider_id="TUIK", provider_name="TÜİK", status="success", structure_validated=True, event_count=12),
@@ -396,7 +358,7 @@ def test_smoke_gate_rejects_event_count_loss():
         coverage_end="2026-11-15",
         status="success",
         sync_action="dry_run",
-        state_source="data/generated/economic_calendar.json",
+        state_source="supabase://economic_events",
         diff=EconomicEventDiff(fetched_event_count=35, final_event_count=35),
         provider_outcomes=[
             EconomicProviderRefreshOutcome(provider_id="TUIK", provider_name="TÜİK", status="success", structure_validated=True, event_count=12),
@@ -420,7 +382,7 @@ def test_smoke_gate_accepts_healthy_empty_provider():
         coverage_end="2026-11-15",
         status="success",
         sync_action="dry_run",
-        state_source="data/generated/economic_calendar.json",
+        state_source="supabase://economic_events",
         diff=EconomicEventDiff(fetched_event_count=33, final_event_count=33),
         provider_outcomes=[
             EconomicProviderRefreshOutcome(provider_id="TUIK", provider_name="TÜİK", status="success", structure_validated=True, event_count=12),
@@ -443,7 +405,7 @@ def test_smoke_gate_rejects_unvalidated_structure_even_if_success():
         coverage_end="2026-11-15",
         status="success",
         sync_action="dry_run",
-        state_source="data/generated/economic_calendar.json",
+        state_source="supabase://economic_events",
         diff=EconomicEventDiff(fetched_event_count=33, final_event_count=33),
         provider_outcomes=[
             EconomicProviderRefreshOutcome(provider_id="TUIK", provider_name="TÜİK", status="success", structure_validated=True, event_count=12),
@@ -466,7 +428,7 @@ def test_smoke_gate_rejects_failed_provider():
         coverage_end="2026-11-15",
         status="success",
         sync_action="dry_run",
-        state_source="data/generated/economic_calendar.json",
+        state_source="supabase://economic_events",
         diff=EconomicEventDiff(fetched_event_count=33, final_event_count=33),
         provider_outcomes=[
             EconomicProviderRefreshOutcome(provider_id="TUIK", provider_name="TÜİK", status="success", structure_validated=True, event_count=12),
@@ -489,7 +451,7 @@ def test_smoke_gate_rejects_all_providers_zero_events():
         coverage_end="2026-11-15",
         status="success",
         sync_action="dry_run",
-        state_source="data/generated/economic_calendar.json",
+        state_source="supabase://economic_events",
         diff=EconomicEventDiff(fetched_event_count=0, final_event_count=0),
         provider_outcomes=[
             EconomicProviderRefreshOutcome(provider_id="TUIK", provider_name="TÜİK", status="success", structure_validated=True, event_count=0),
@@ -509,8 +471,7 @@ def test_smoke_gate_rejects_all_providers_zero_events():
 # ====================================================
 
 @pytest.mark.asyncio
-async def test_service_exception_with_previous_preserves_cache_and_reports_failure(tmp_path):
-    cache_path = tmp_path / "economic_calendar.json"
+async def test_service_exception_with_previous_state_preserves_it_and_reports_failure():
     prev_cal = _build_test_calendar(
         status="success",
         events=[
@@ -522,10 +483,9 @@ async def test_service_exception_with_previous_preserves_cache_and_reports_failu
             )
         ]
     )
-    cache_path.write_text(prev_cal.model_dump_json(indent=2), encoding="utf-8")
-    initial_bytes = cache_path.read_bytes()
 
-    mock_cache = JsonEconomicCalendarStateStore(file_path=str(cache_path))
+    mock_cache = MemoryEconomicCalendarStateStore()
+    mock_cache._pending = prev_cal
     mock_service = MagicMock()
     mock_service.providers = []
     mock_service.get_rolling_calendar = AsyncMock(side_effect=RuntimeError("Service network explosion"))
@@ -537,7 +497,7 @@ async def test_service_exception_with_previous_preserves_cache_and_reports_failu
     assert res.sync_action == "preserved_previous"
     assert exit_code_for_result(res) == 1
     # Byte-identical assertion
-    assert cache_path.read_bytes() == initial_bytes
+    assert mock_cache.load() == prev_cal
     # Carried forward count correctly reported
     assert res.diff.carried_forward_count == 1
     # Fallback provider outcomes
@@ -547,9 +507,8 @@ async def test_service_exception_with_previous_preserves_cache_and_reports_failu
 
 
 @pytest.mark.asyncio
-async def test_service_exception_without_previous_writes_nothing(tmp_path):
-    cache_path = tmp_path / "non_existent_calendar.json"
-    mock_cache = JsonEconomicCalendarStateStore(file_path=str(cache_path))
+async def test_service_exception_without_previous_state_stages_nothing():
+    mock_cache = MemoryEconomicCalendarStateStore()
     mock_service = MagicMock()
     mock_service.providers = []
     mock_service.get_rolling_calendar = AsyncMock(side_effect=ValueError("Fatal parsing failure"))
@@ -559,15 +518,14 @@ async def test_service_exception_without_previous_writes_nothing(tmp_path):
 
     assert res.status == "failed"
     assert res.sync_action == "not_written"
-    assert not cache_path.exists()
+    assert mock_cache.load() is None
     assert exit_code_for_result(res) == 1
     assert any("ValueError" in w for w in res.warnings)
 
 
 @pytest.mark.asyncio
-async def test_service_exception_sends_operational_failure_email_when_configured(tmp_path):
-    cache_path = tmp_path / "economic_calendar.json"
-    mock_cache = JsonEconomicCalendarStateStore(file_path=str(cache_path))
+async def test_service_exception_sends_operational_failure_email_when_configured():
+    mock_cache = MemoryEconomicCalendarStateStore()
     mock_service = MagicMock()
     mock_service.providers = []
     mock_service.get_rolling_calendar = AsyncMock(side_effect=RuntimeError("Service fatal crash"))
@@ -586,9 +544,8 @@ async def test_service_exception_sends_operational_failure_email_when_configured
 
 
 @pytest.mark.asyncio
-async def test_service_exception_dry_run_never_sends_email_or_writes_cache(tmp_path):
-    cache_path = tmp_path / "economic_calendar.json"
-    mock_cache = JsonEconomicCalendarStateStore(file_path=str(cache_path))
+async def test_service_exception_dry_run_never_sends_email_or_stages_state():
+    mock_cache = MemoryEconomicCalendarStateStore()
     mock_service = MagicMock()
     mock_service.providers = []
     mock_service.get_rolling_calendar = AsyncMock(side_effect=RuntimeError("Dry run crash"))
@@ -602,15 +559,14 @@ async def test_service_exception_dry_run_never_sends_email_or_writes_cache(tmp_p
 
     assert res.status == "failed"
     assert res.sync_action == "dry_run"
-    assert not cache_path.exists()
+    assert mock_cache.load() is None
     assert res.email_sent is False
     assert res.email_status == "skipped_dry_run"
     assert mock_email.send_email.call_count == 0
 
 
 @pytest.mark.asyncio
-async def test_partial_failed_merge_preserves_previous_byte_identical(tmp_path):
-    cache_path = tmp_path / "economic_calendar.json"
+async def test_partial_failed_merge_preserves_previous_state():
     prev_cal = _build_test_calendar(
         status="success",
         events=[
@@ -622,10 +578,9 @@ async def test_partial_failed_merge_preserves_previous_byte_identical(tmp_path):
             )
         ]
     )
-    cache_path.write_text(prev_cal.model_dump_json(indent=2), encoding="utf-8")
-    initial_bytes = cache_path.read_bytes()
 
-    mock_cache = JsonEconomicCalendarStateStore(file_path=str(cache_path))
+    mock_cache = MemoryEconomicCalendarStateStore()
+    mock_cache._pending = prev_cal
     # Mock current partial calendar
     curr_cal = _build_test_calendar(
         status="partial",
@@ -651,13 +606,12 @@ async def test_partial_failed_merge_preserves_previous_byte_identical(tmp_path):
         assert res.status == "failed"
         assert res.sync_action == "preserved_previous"
         assert exit_code_for_result(res) == 1
-        assert cache_path.read_bytes() == initial_bytes
-        assert any("Partial economic calendar merge produced no usable calendar" in w for w in res.warnings)
+        assert mock_cache.load() == prev_cal
+        assert any("Partial economic calendar merge produced no usable result" in w for w in res.warnings)
 
 
 @pytest.mark.asyncio
-async def test_partial_empty_merge_preserves_previous_byte_identical(tmp_path):
-    cache_path = tmp_path / "economic_calendar.json"
+async def test_partial_empty_merge_preserves_previous_state():
     prev_cal = _build_test_calendar(
         status="success",
         events=[
@@ -669,10 +623,9 @@ async def test_partial_empty_merge_preserves_previous_byte_identical(tmp_path):
             )
         ]
     )
-    cache_path.write_text(prev_cal.model_dump_json(indent=2), encoding="utf-8")
-    initial_bytes = cache_path.read_bytes()
 
-    mock_cache = JsonEconomicCalendarStateStore(file_path=str(cache_path))
+    mock_cache = MemoryEconomicCalendarStateStore()
+    mock_cache._pending = prev_cal
     curr_cal = _build_test_calendar(status="partial", events=[])
     mock_service = MagicMock()
     mock_service.get_rolling_calendar = AsyncMock(return_value=curr_cal)
@@ -684,13 +637,13 @@ async def test_partial_empty_merge_preserves_previous_byte_identical(tmp_path):
 
         assert res.status == "failed"
         assert res.sync_action == "preserved_previous"
-        assert cache_path.read_bytes() == initial_bytes
+        assert mock_cache.load() == prev_cal
 
 
 @pytest.mark.asyncio
-async def test_partial_failed_merge_does_not_call_cache_save(tmp_path):
+async def test_partial_failed_merge_does_not_stage_new_state():
     mock_cache = MagicMock()
-    mock_cache.file_path = "data/generated/economic_calendar.json"
+    mock_cache.state_source = "supabase://economic_events"
     prev_cal = _build_test_calendar(
         status="success",
         events=[
@@ -703,7 +656,7 @@ async def test_partial_failed_merge_does_not_call_cache_save(tmp_path):
         ]
     )
     mock_cache.load = MagicMock(return_value=prev_cal)
-    mock_cache.save = MagicMock()
+    mock_cache.stage = MagicMock()
 
     curr_cal = _build_test_calendar(status="partial", events=[])
     mock_service = MagicMock()
@@ -716,12 +669,11 @@ async def test_partial_failed_merge_does_not_call_cache_save(tmp_path):
 
         assert res.status == "failed"
         assert res.sync_action == "preserved_previous"
-        mock_cache.save.assert_not_called()
+        mock_cache.stage.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_partial_failed_merge_reports_carried_forward_counts(tmp_path):
-    cache_path = tmp_path / "economic_calendar.json"
+async def test_partial_failed_merge_reports_carried_forward_counts():
     prev_cal = _build_test_calendar(
         status="success",
         events=[
@@ -733,7 +685,7 @@ async def test_partial_failed_merge_reports_carried_forward_counts(tmp_path):
             )
         ]
     )
-    mock_cache = JsonEconomicCalendarStateStore(file_path=str(cache_path))
+    mock_cache = MemoryEconomicCalendarStateStore()
     curr_cal = _build_test_calendar(status="partial", events=[])
     mock_service = MagicMock()
     mock_service.get_rolling_calendar = AsyncMock(return_value=curr_cal)
@@ -753,9 +705,8 @@ async def test_partial_failed_merge_reports_carried_forward_counts(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_partial_without_previous_and_zero_events_writes_nothing(tmp_path):
-    cache_path = tmp_path / "economic_calendar.json"
-    mock_cache = JsonEconomicCalendarStateStore(file_path=str(cache_path))
+async def test_partial_without_previous_and_zero_events_stages_nothing():
+    mock_cache = MemoryEconomicCalendarStateStore()
     curr_cal = _build_test_calendar(status="partial", events=[])
     mock_service = MagicMock()
     mock_service.get_rolling_calendar = AsyncMock(return_value=curr_cal)
@@ -765,14 +716,13 @@ async def test_partial_without_previous_and_zero_events_writes_nothing(tmp_path)
 
     assert res.status == "failed"
     assert res.sync_action == "not_written"
-    assert not cache_path.exists()
+    assert mock_cache.load() is None
     assert exit_code_for_result(res) == 1
 
 
 @pytest.mark.asyncio
-async def test_partial_without_previous_and_usable_events_can_write_initial_partial(tmp_path):
-    cache_path = tmp_path / "economic_calendar.json"
-    mock_cache = JsonEconomicCalendarStateStore(file_path=str(cache_path))
+async def test_partial_without_previous_and_usable_events_stages_initial_partial():
+    mock_cache = MemoryEconomicCalendarStateStore()
     usable_ev = EconomicEvent(
         name="TCMB Faiz Kararı", country="TR",
         scheduled_at="2026-08-20T14:00:00+03:00", scheduled_at_istanbul="2026-08-20T14:00:00+03:00",
@@ -788,131 +738,5 @@ async def test_partial_without_previous_and_usable_events_can_write_initial_part
 
     assert res.status == "partial"
     assert res.sync_action == "initial_partial_written"
-    assert cache_path.exists()
+    assert mock_cache.load() is not None
     assert exit_code_for_result(res) == 0
-
-
-@pytest.mark.asyncio
-async def test_save_failed_success_no_previous_writes_nothing(tmp_path):
-    cache_path = tmp_path / "economic_calendar.json"
-    mock_cache = JsonEconomicCalendarStateStore(file_path=str(cache_path))
-    usable_ev = EconomicEvent(
-        name="TCMB Faiz Kararı", country="TR",
-        scheduled_at="2026-08-20T14:00:00+03:00", scheduled_at_istanbul="2026-08-20T14:00:00+03:00",
-        source="TCMB", provider_id="TCMB", event_code="TR_POLICY_RATE", reference_period="2026-08",
-        source_event_id="TCMB:TR_POLICY_RATE:2026-N08"
-    )
-    curr_cal = _build_test_calendar(status="success", events=[usable_ev])
-    mock_service = MagicMock()
-    mock_service.get_rolling_calendar = AsyncMock(return_value=curr_cal)
-
-    with patch.object(mock_cache, "save", return_value=False):
-        job = EconomicCalendarRefreshJob(state_store=mock_cache, service=mock_service, no_email=True)
-        res = await job.run(as_of=datetime(2026, 8, 17, 7, 30, tzinfo=ZoneInfo("Europe/Istanbul")))
-
-        assert res.status == "failed"
-        assert res.sync_action == "write_failed"
-        assert not cache_path.exists()
-        assert exit_code_for_result(res) == 1
-        assert res.warnings.count(STATE_WRITE_FAILED_WARNING) == 1
-
-
-@pytest.mark.asyncio
-async def test_save_failed_success_with_previous_preserves_cache(tmp_path):
-    cache_path = tmp_path / "economic_calendar.json"
-    prev_cal = _build_test_calendar(
-        status="success",
-        events=[
-            EconomicEvent(
-                name="TCMB Faiz Kararı", country="TR",
-                scheduled_at="2026-08-20T14:00:00+03:00", scheduled_at_istanbul="2026-08-20T14:00:00+03:00",
-                source="TCMB", provider_id="TCMB", event_code="TR_POLICY_RATE", reference_period="2026-08",
-                source_event_id="TCMB:TR_POLICY_RATE:2026-N08"
-            )
-        ]
-    )
-    cache_path.write_text(prev_cal.model_dump_json(indent=2), encoding="utf-8")
-    initial_bytes = cache_path.read_bytes()
-
-    mock_cache = JsonEconomicCalendarStateStore(file_path=str(cache_path))
-    curr_cal = _build_test_calendar(status="success", events=[])
-    mock_service = MagicMock()
-    mock_service.get_rolling_calendar = AsyncMock(return_value=curr_cal)
-
-    with patch.object(mock_cache, "save", return_value=False):
-        job = EconomicCalendarRefreshJob(state_store=mock_cache, service=mock_service, no_email=True)
-        res = await job.run(as_of=datetime(2026, 8, 17, 7, 30, tzinfo=ZoneInfo("Europe/Istanbul")))
-
-        assert res.status == "failed"
-        assert res.sync_action == "write_failed"
-        assert cache_path.read_bytes() == initial_bytes
-        assert exit_code_for_result(res) == 1
-        assert res.warnings.count(STATE_WRITE_FAILED_WARNING) == 1
-
-
-@pytest.mark.asyncio
-async def test_save_failed_partial_with_previous_preserves_cache(tmp_path):
-    cache_path = tmp_path / "economic_calendar.json"
-    prev_cal = _build_test_calendar(
-        status="success",
-        events=[
-            EconomicEvent(
-                name="TCMB Faiz Kararı", country="TR",
-                scheduled_at="2026-08-20T14:00:00+03:00", scheduled_at_istanbul="2026-08-20T14:00:00+03:00",
-                source="TCMB", provider_id="TCMB", event_code="TR_POLICY_RATE", reference_period="2026-08",
-                source_event_id="TCMB:TR_POLICY_RATE:2026-N08"
-            )
-        ]
-    )
-    cache_path.write_text(prev_cal.model_dump_json(indent=2), encoding="utf-8")
-    initial_bytes = cache_path.read_bytes()
-
-    mock_cache = JsonEconomicCalendarStateStore(file_path=str(cache_path))
-    curr_cal = _build_test_calendar(
-        status="partial",
-        events=[
-            EconomicEvent(
-                name="Türkiye TÜFE", country="TR",
-                scheduled_at="2026-09-03T10:00:00+03:00", scheduled_at_istanbul="2026-09-03T10:00:00+03:00",
-                source="TÜİK", provider_id="TUIK", event_code="TR_CPI", reference_period="2026-08",
-                source_event_id="TUIK:TR_CPI:2026-08"
-            )
-        ]
-    )
-    mock_service = MagicMock()
-    mock_service.get_rolling_calendar = AsyncMock(return_value=curr_cal)
-
-    with patch.object(mock_cache, "save", return_value=False):
-        job = EconomicCalendarRefreshJob(state_store=mock_cache, service=mock_service, no_email=True)
-        res = await job.run(as_of=datetime(2026, 8, 17, 7, 30, tzinfo=ZoneInfo("Europe/Istanbul")))
-
-        assert res.status == "failed"
-        assert res.sync_action == "write_failed"
-        assert cache_path.read_bytes() == initial_bytes
-        assert exit_code_for_result(res) == 1
-        assert res.warnings.count(STATE_WRITE_FAILED_WARNING) == 1
-
-
-@pytest.mark.asyncio
-async def test_save_failed_partial_without_previous_writes_nothing(tmp_path):
-    cache_path = tmp_path / "economic_calendar.json"
-    mock_cache = JsonEconomicCalendarStateStore(file_path=str(cache_path))
-    usable_ev = EconomicEvent(
-        name="TCMB Faiz Kararı", country="TR",
-        scheduled_at="2026-08-20T14:00:00+03:00", scheduled_at_istanbul="2026-08-20T14:00:00+03:00",
-        source="TCMB", provider_id="TCMB", event_code="TR_POLICY_RATE", reference_period="2026-08",
-        source_event_id="TCMB:TR_POLICY_RATE:2026-N08"
-    )
-    curr_cal = _build_test_calendar(status="partial", events=[usable_ev])
-    mock_service = MagicMock()
-    mock_service.get_rolling_calendar = AsyncMock(return_value=curr_cal)
-
-    with patch.object(mock_cache, "save", return_value=False):
-        job = EconomicCalendarRefreshJob(state_store=mock_cache, service=mock_service, no_email=True)
-        res = await job.run(as_of=datetime(2026, 8, 17, 7, 30, tzinfo=ZoneInfo("Europe/Istanbul")))
-
-        assert res.status == "failed"
-        assert res.sync_action == "write_failed"
-        assert not cache_path.exists()
-        assert exit_code_for_result(res) == 1
-        assert res.warnings.count(STATE_WRITE_FAILED_WARNING) == 1

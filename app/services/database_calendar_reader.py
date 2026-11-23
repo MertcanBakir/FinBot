@@ -1,8 +1,7 @@
 """Supabase-backed calendar snapshots used by APIs and refresh jobs.
 
-Rolling calendar state lives in PostgreSQL.  The JSON calendar classes remain
-available for tests and the explicit BIST fiscal-period archive, but production
-read paths must not depend on checked-in rolling JSON files.
+Rolling calendar state lives in PostgreSQL.  The JSON calendar classes remain available for tests, but production read paths
+must not depend on checked-in rolling JSON files.
 """
 
 import logging

@@ -10,9 +10,6 @@ from app.services.job_tracking.adapters.economic_calendar_adapter import (
     EconomicCalendarRefreshResultAdapter,
 )
 from app.services.job_tracking.adapters.fx_adapter import FxPriceResultAdapter
-from app.services.job_tracking.adapters.market_summary_adapter import (
-    MarketSummaryResultAdapter,
-)
 from app.services.job_tracking.adapters.nasdaq_adapter import NasdaqPricesResultAdapter
 from app.services.job_tracking.adapters.portfolio_snapshot_adapter import (
     PortfolioSnapshotResultAdapter,
@@ -29,5 +26,4 @@ __all__ = [
     "EconomicCalendarRefreshResultAdapter",
     "EarningsRefreshResultAdapter",
     "PortfolioSnapshotResultAdapter",
-    "MarketSummaryResultAdapter",
 ]

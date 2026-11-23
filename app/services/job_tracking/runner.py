@@ -1,8 +1,7 @@
-import inspect
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any, Callable, Generic, Optional, TypeVar
+from typing import Awaitable, Callable, Generic, Optional, TypeVar
 from uuid import UUID
 
 from app.core.database import get_db_connection
@@ -34,20 +33,6 @@ from app.services.job_tracking.notification.renderer import JobEmailRenderer
 logger = logging.getLogger(__name__)
 
 TResult = TypeVar("TResult")
-
-
-def _inspect_takes_ctx(fn: Callable[..., Any]) -> bool:
-    """Analyze callable signature to determine whether it accepts JobExecutionContext."""
-    try:
-        sig = inspect.signature(fn)
-        params = [
-            p
-            for p in sig.parameters.values()
-            if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
-        ]
-        return len(params) > 0 or any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in sig.parameters.values())
-    except (ValueError, TypeError):
-        return True
 
 
 def build_job_run_context(
@@ -105,28 +90,66 @@ class TrackedJobRunner(Generic[TResult]):
 
     def _call_business_fn(
         self,
-        execute_fn: Callable[..., Any],
+        execute_fn: Callable[[JobExecutionContext], TResult],
         exec_ctx: JobExecutionContext,
-    ) -> Any:
-        """Invoke synchronous execute_fn exactly once with appropriate arguments."""
-        if _inspect_takes_ctx(execute_fn):
-            return execute_fn(exec_ctx)
-        return execute_fn()
+    ) -> TResult:
+        """Invoke a synchronous business function with its explicit execution context."""
+        return execute_fn(exec_ctx)
 
     async def _call_business_fn_async(
         self,
-        execute_fn: Callable[..., Any],
+        execute_fn: Callable[[JobExecutionContext], Awaitable[TResult]],
         exec_ctx: JobExecutionContext,
-    ) -> Any:
-        """Invoke asynchronous execute_fn exactly once with appropriate arguments."""
-        if _inspect_takes_ctx(execute_fn):
-            res = execute_fn(exec_ctx)
-        else:
-            res = execute_fn()
+    ) -> TResult:
+        """Invoke an asynchronous business function with its explicit execution context."""
+        return await execute_fn(exec_ctx)
 
-        if inspect.isawaitable(res):
-            return await res
-        return res
+    def _resolve_run_context(
+        self,
+        context: Optional[JobRunContext],
+        dry_run: bool,
+        no_email: bool,
+    ) -> JobRunContext:
+        """Build the runtime context once for either synchronous or asynchronous execution."""
+        return context or build_job_run_context(dry_run=dry_run, no_email=no_email)
+
+    def _start_tracked_run(self, ctx: JobRunContext) -> Optional[UUID]:
+        """Start Transaction A when tracking is enabled; return None for dry-run execution."""
+        if ctx.dry_run:
+            return None
+
+        try:
+            with self.db_connection_factory() as conn:
+                with conn.transaction():
+                    run_id = JobTrackingRepository.start_run(conn, self.spec, ctx)
+            logger.info("Started tracked job '%s' (refresh_run_id=%s)", self.spec.job_name, run_id)
+            return run_id
+        except (DuplicateJobRunError, JobTrackingStartError):
+            raise
+        except Exception as exc:
+            logger.error(
+                "Failed to start job tracking for '%s' (error_type=%s). Failing closed.",
+                self.spec.job_name,
+                type(exc).__name__,
+            )
+            raise JobTrackingStartError(
+                f"Failed to start tracked job '{self.spec.job_name}': {type(exc).__name__}"
+            ) from exc
+
+    @staticmethod
+    def _build_execution_context(ctx: JobRunContext, run_id: Optional[UUID]) -> JobExecutionContext:
+        return JobExecutionContext(
+            run_id=run_id,
+            dry_run=ctx.dry_run,
+            no_email=ctx.no_email,
+            started_at=ctx.started_at,
+        )
+
+    @staticmethod
+    def _mark_dry_run_result(result: TResult) -> TResult:
+        if hasattr(result, "email_status"):
+            result.email_status = "skipped_dry_run"
+        return result
 
     def _finalize_and_notify_lifecycle(
         self,
@@ -490,55 +513,22 @@ class TrackedJobRunner(Generic[TResult]):
 
         return job_result  # type: ignore
 
-    def run(
+    def _complete_tracked_execution(
         self,
-        execute_fn: Callable[..., TResult],
-        context: Optional[JobRunContext] = None,
-        dry_run: bool = False,
-        no_email: bool = False,
+        run_id: UUID,
+        ctx: JobRunContext,
+        job_result: Optional[TResult],
+        unhandled_exc: Optional[Exception],
+        async_execution: bool = False,
     ) -> TResult:
-        """Execute the job synchronously with full tracking lifecycle and separated transaction boundaries."""
-        ctx = context or build_job_run_context(dry_run=dry_run, no_email=no_email)
-
-        # 1. Dry-run execution: zero DB writes, zero emails
-        if ctx.dry_run:
-            logger.info("Executing job '%s' in DRY-RUN mode (tracking disabled).", self.spec.job_name)
-            exec_ctx = JobExecutionContext(run_id=None, dry_run=True, no_email=ctx.no_email, started_at=ctx.started_at)
-            result = self._call_business_fn(execute_fn, exec_ctx)
-            if hasattr(result, "email_status"):
-                result.email_status = "skipped_dry_run"
-            return result
-
-        # 2. Production Apply-DB execution: Transaction A (Start tracking - Fail Closed)
-        run_id: UUID
-        try:
-            with self.db_connection_factory() as conn:
-                with conn.transaction():
-                    run_id = JobTrackingRepository.start_run(conn, self.spec, ctx)
-            logger.info("Started tracked job '%s' (refresh_run_id=%s)", self.spec.job_name, run_id)
-        except (DuplicateJobRunError, JobTrackingStartError):
-            raise
-        except Exception as exc:
+        """Apply the shared execution-error handling and lifecycle finalization."""
+        if unhandled_exc is not None:
+            execution_mode = "async " if async_execution else ""
             logger.error(
-                "Failed to start job tracking for '%s' (error_type=%s). Failing closed.",
+                "Unhandled exception during %sjob execution of '%s' (error_type=%s)",
+                execution_mode,
                 self.spec.job_name,
-                type(exc).__name__,
-            )
-            raise JobTrackingStartError(f"Failed to start tracked job '{self.spec.job_name}': {type(exc).__name__}") from exc
-
-        # Execute business logic (Transaction B is managed inside business logic)
-        job_result: Optional[TResult] = None
-        unhandled_exc: Optional[Exception] = None
-
-        exec_ctx = JobExecutionContext(run_id=run_id, dry_run=False, no_email=ctx.no_email, started_at=ctx.started_at)
-        try:
-            job_result = self._call_business_fn(execute_fn, exec_ctx)
-        except Exception as exc:
-            unhandled_exc = exc
-            logger.error(
-                "Unhandled exception during job execution of '%s' (error_type=%s)",
-                self.spec.job_name,
-                type(exc).__name__,
+                type(unhandled_exc).__name__,
             )
 
         return self._finalize_and_notify_lifecycle(
@@ -548,58 +538,69 @@ class TrackedJobRunner(Generic[TResult]):
             unhandled_exc=unhandled_exc,
         )
 
-    async def run_async(
+    def run(
         self,
-        execute_fn: Callable[..., Any],
+        execute_fn: Callable[[JobExecutionContext], TResult],
         context: Optional[JobRunContext] = None,
         dry_run: bool = False,
         no_email: bool = False,
     ) -> TResult:
-        """Execute the job asynchronously with full tracking lifecycle and separated transaction boundaries."""
-        ctx = context or build_job_run_context(dry_run=dry_run, no_email=no_email)
+        """Execute the job synchronously with full tracking lifecycle and separated transaction boundaries."""
+        ctx = self._resolve_run_context(context, dry_run, no_email)
+        run_id = self._start_tracked_run(ctx)
+        exec_ctx = self._build_execution_context(ctx, run_id)
 
         # 1. Dry-run execution: zero DB writes, zero emails
-        if ctx.dry_run:
-            logger.info("Executing async job '%s' in DRY-RUN mode (tracking disabled).", self.spec.job_name)
-            exec_ctx = JobExecutionContext(run_id=None, dry_run=True, no_email=ctx.no_email, started_at=ctx.started_at)
-            result = await self._call_business_fn_async(execute_fn, exec_ctx)
-            if hasattr(result, "email_status"):
-                result.email_status = "skipped_dry_run"
-            return result
-
-        # 2. Production Apply-DB execution: Transaction A (Start tracking - Fail Closed)
-        run_id: UUID
-        try:
-            with self.db_connection_factory() as conn:
-                with conn.transaction():
-                    run_id = JobTrackingRepository.start_run(conn, self.spec, ctx)
-            logger.info("Started tracked async job '%s' (refresh_run_id=%s)", self.spec.job_name, run_id)
-        except (DuplicateJobRunError, JobTrackingStartError):
-            raise
-        except Exception as exc:
-            logger.error(
-                "Failed to start job tracking for '%s' (error_type=%s). Failing closed.",
-                self.spec.job_name,
-                type(exc).__name__,
-            )
-            raise JobTrackingStartError(f"Failed to start tracked job '{self.spec.job_name}': {type(exc).__name__}") from exc
+        if run_id is None:
+            logger.info("Executing job '%s' in DRY-RUN mode (tracking disabled).", self.spec.job_name)
+            result = self._call_business_fn(execute_fn, exec_ctx)
+            return self._mark_dry_run_result(result)
 
         # Execute business logic (Transaction B is managed inside business logic)
         job_result: Optional[TResult] = None
         unhandled_exc: Optional[Exception] = None
 
-        exec_ctx = JobExecutionContext(run_id=run_id, dry_run=False, no_email=ctx.no_email, started_at=ctx.started_at)
+        try:
+            job_result = self._call_business_fn(execute_fn, exec_ctx)
+        except Exception as exc:
+            unhandled_exc = exc
+
+        return self._complete_tracked_execution(
+            run_id=run_id,
+            ctx=ctx,
+            job_result=job_result,
+            unhandled_exc=unhandled_exc,
+            async_execution=True,
+        )
+
+    async def run_async(
+        self,
+        execute_fn: Callable[[JobExecutionContext], Awaitable[TResult]],
+        context: Optional[JobRunContext] = None,
+        dry_run: bool = False,
+        no_email: bool = False,
+    ) -> TResult:
+        """Execute the job asynchronously with full tracking lifecycle and separated transaction boundaries."""
+        ctx = self._resolve_run_context(context, dry_run, no_email)
+        run_id = self._start_tracked_run(ctx)
+        exec_ctx = self._build_execution_context(ctx, run_id)
+
+        # 1. Dry-run execution: zero DB writes, zero emails
+        if run_id is None:
+            logger.info("Executing async job '%s' in DRY-RUN mode (tracking disabled).", self.spec.job_name)
+            result = await self._call_business_fn_async(execute_fn, exec_ctx)
+            return self._mark_dry_run_result(result)
+
+        # Execute business logic (Transaction B is managed inside business logic)
+        job_result: Optional[TResult] = None
+        unhandled_exc: Optional[Exception] = None
+
         try:
             job_result = await self._call_business_fn_async(execute_fn, exec_ctx)
         except Exception as exc:
             unhandled_exc = exc
-            logger.error(
-                "Unhandled exception during async job execution of '%s' (error_type=%s)",
-                self.spec.job_name,
-                type(exc).__name__,
-            )
 
-        return self._finalize_and_notify_lifecycle(
+        return self._complete_tracked_execution(
             run_id=run_id,
             ctx=ctx,
             job_result=job_result,
