@@ -50,14 +50,9 @@ from app.services.job_tracking.notification.renderer import (
     EconomicCalendarEmailRenderer,
 )
 from app.services.job_tracking.runner import TrackedJobRunner
+from app.services.prepared_refresh_sync import sync_prepared_refresh
 
 logger = logging.getLogger(__name__)
-
-STATE_WRITE_FAILED_WARNING = (
-    "Rolling economic calendar state save failed to write to disk; "
-    "no new calendar data was persisted."
-)
-
 
 def calculate_economic_diff(
     previous: Optional[RollingEconomicCalendar],
@@ -322,38 +317,20 @@ class EconomicCalendarRefreshJob:
 
         elif current_calendar.status == "success":
             # Success replaces previous completely (healthy empty supported)
-            save_ok = self.state_store.save(current_calendar)
-            if save_ok:
-                sync_action = "replaced"
-                final_calendar = current_calendar
-            else:
-                logger.error(STATE_WRITE_FAILED_WARNING)
-                if STATE_WRITE_FAILED_WARNING not in current_calendar.warnings:
-                    current_calendar.warnings.append(STATE_WRITE_FAILED_WARNING)
-                sync_action = "write_failed"
-                job_status = "failed"
-                final_calendar = previous_calendar if previous_calendar else current_calendar
+            final_calendar = self.state_store.stage(current_calendar)
+            sync_action = "replaced"
 
         elif current_calendar.status == "partial":
             if previous_calendar is not None:
                 # Merge fresh partial with previous reliable state_store
                 merged_calendar = merge_partial_economic_calendar(previous_calendar, current_calendar)
                 if merged_calendar.status != "failed" and len(merged_calendar.events) > 0:
-                    save_ok = self.state_store.save(merged_calendar)
-                    if save_ok:
-                        sync_action = "merged_and_updated"
-                        final_calendar = merged_calendar
-                    else:
-                        logger.error(STATE_WRITE_FAILED_WARNING)
-                        if STATE_WRITE_FAILED_WARNING not in current_calendar.warnings:
-                            current_calendar.warnings.append(STATE_WRITE_FAILED_WARNING)
-                        sync_action = "write_failed"
-                        job_status = "failed"
-                        final_calendar = previous_calendar
+                    final_calendar = self.state_store.stage(merged_calendar)
+                    sync_action = "merged_and_updated"
                 else:
-                    # Failed or empty merged calendar: DO NOT CALL state_store.save!
-                    logger.warning("Partial economic calendar merge produced no usable calendar; previous state_store was preserved.")
-                    unusable_warn = "Partial economic calendar merge produced no usable calendar; previous state_store was preserved."
+                    # Failed or empty merged calendar: do not stage a new candidate.
+                    logger.warning("Partial economic calendar merge produced no usable result; previous Supabase state was preserved.")
+                    unusable_warn = "Partial economic calendar merge produced no usable result; previous Supabase state was preserved."
                     if unusable_warn not in current_calendar.warnings:
                         current_calendar.warnings.append(unusable_warn)
                     sync_action = "preserved_previous"
@@ -362,20 +339,11 @@ class EconomicCalendarRefreshJob:
             else:
                 # No previous state_store exists
                 if len(current_calendar.events) > 0:
-                    save_ok = self.state_store.save(current_calendar)
-                    if save_ok:
-                        sync_action = "initial_partial_written"
-                        final_calendar = current_calendar
-                    else:
-                        logger.error(STATE_WRITE_FAILED_WARNING)
-                        if STATE_WRITE_FAILED_WARNING not in current_calendar.warnings:
-                            current_calendar.warnings.append(STATE_WRITE_FAILED_WARNING)
-                        sync_action = "write_failed"
-                        job_status = "failed"
-                        final_calendar = current_calendar
+                    final_calendar = self.state_store.stage(current_calendar)
+                    sync_action = "initial_partial_written"
                 else:
-                    # RULE C: Partial status with 0 events and no previous state_store -> Do not write corrupt empty file!
-                    logger.error("RULE C TRIGGERED: Partial status with 0 events and no previous state_store. File will NOT be written. Job status set to 'failed'.")
+                    # RULE C: Partial status with 0 events and no previous state -> do not stage an unusable result.
+                    logger.error("RULE C TRIGGERED: Partial status with 0 events and no previous Supabase state. Candidate will NOT be staged.")
                     sync_action = "not_written"
                     job_status = "failed"
                     final_calendar = current_calendar
@@ -404,10 +372,6 @@ class EconomicCalendarRefreshJob:
                 "coverage_end": cov_end_d.isoformat()
             })
             diff = calculate_economic_diff(previous_calendar, current_calendar, reporting_final)
-
-        elif sync_action == "write_failed" and not previous_calendar:
-            reporting_final = current_calendar.model_copy(update={"events": []})
-            diff = calculate_economic_diff(None, current_calendar, reporting_final)
 
         else:
             diff = calculate_economic_diff(previous_calendar, current_calendar, final_calendar)
@@ -457,35 +421,20 @@ class EconomicCalendarRefreshJob:
             coverage_end=(ref_dt.date() + timedelta(days=90)).isoformat(),
             status=job_status,
             sync_action=sync_action,
-            state_source=self.state_store.file_path,
+            state_source=self.state_store.state_source,
             diff=diff,
             provider_outcomes=provider_outcomes,
             warnings=list(current_calendar.warnings)
         )
 
-        # 6. Database Parallel Synchronization (using existing refresh_run_id from TrackedJobRunner)
-        try:
-            db_status, db_error = await asyncio.to_thread(
-                sync_economic_refresh_to_database,
-                result=result,
-                final_calendar=final_calendar,
-                refresh_run_id=context.run_id,
-                dry_run=self.dry_run,
-            )
-            result.database_status = db_status
-            result.database_error = db_error
-            if db_status == "failed":
-                logger.error(f"Database synchronization failed: {db_error}")
-            elif db_status == "success":
-                logger.info("Database synchronization completed successfully.")
-        except AssertionError:
-            raise
-        except Exception as db_err:
-            logger.error(f"Unexpected error during database sync: {type(db_err).__name__}")
-            result.database_status = "failed"
-            result.database_error = f"{type(db_err).__name__}: database synchronization error"
-
-        return result
+        # 6. Persist the prepared state, then complete the result with DB status.
+        return await sync_prepared_refresh(
+            sync_economic_refresh_to_database,
+            result,
+            final_calendar=final_calendar,
+            refresh_run_id=context.run_id,
+            dry_run=self.dry_run,
+        )
 
     async def run(self, as_of: Optional[datetime] = None) -> EconomicCalendarRefreshJobResult:
         runner = TrackedJobRunner(

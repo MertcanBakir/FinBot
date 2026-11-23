@@ -1,7 +1,4 @@
-import json
 import logging
-import os
-import tempfile
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 from zoneinfo import ZoneInfo
@@ -25,10 +22,10 @@ logger = logging.getLogger(__name__)
 
 
 class EconomicCalendarStateStore(Protocol):
-    file_path: str
+    state_source: str
 
     def load(self) -> Optional[RollingEconomicCalendar]: ...
-    def save(self, calendar: RollingEconomicCalendar) -> bool: ...
+    def stage(self, calendar: RollingEconomicCalendar) -> RollingEconomicCalendar: ...
 
 
 def merge_partial_economic_calendar(
@@ -161,11 +158,11 @@ def merge_partial_economic_calendar(
                 filtered_final_events.append(fresh_events[0])
             elif len(fresh_events) > 1:
                 # 3. Multiple fresh with different timestamps: conflict! Exclude stable identity entirely
-                warn_msg = f"{p_id}: Conflicting fresh events for stable identity '{stable_id_str}' with multiple timestamps; identity excluded from final cache"
+                warn_msg = f"{p_id}: Conflicting fresh events for stable identity '{stable_id_str}' with multiple timestamps; identity excluded from final state"
                 defense_warnings_by_provider.setdefault(p_id, []).append(warn_msg)
             else:
                 # 4. Zero fresh + multiple carried with different timestamps: ambiguous! Exclude stable identity entirely
-                warn_msg = f"{p_id}: Ambiguous carried-forward events for stable identity '{stable_id_str}' with multiple timestamps; identity excluded from final cache"
+                warn_msg = f"{p_id}: Ambiguous carried-forward events for stable identity '{stable_id_str}' with multiple timestamps; identity excluded from final state"
                 defense_warnings_by_provider.setdefault(p_id, []).append(warn_msg)
 
     # Deduplicate final events by occurrence key
@@ -261,55 +258,20 @@ def merge_partial_economic_calendar(
     )
 
 
-CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "generated")
+class SupabaseEconomicCalendarStateStore:
+    """Read persisted state from Supabase and stage refresh results in memory."""
 
-class JsonEconomicCalendarStateStore:
-    def __init__(self, file_path: Optional[str] = None):
-        self.file_path = file_path or os.path.join(CACHE_DIR, "economic_calendar.json")
+    state_source = "supabase://economic_events"
+
+    def __init__(self) -> None:
+        self._pending: Optional[RollingEconomicCalendar] = None
 
     def load(self) -> Optional[RollingEconomicCalendar]:
-        if not os.path.exists(self.file_path):
-            logger.debug(f"Rolling economic calendar cache file not found at {self.file_path}")
-            return None
+        return self._pending or database_calendar_reader.load_economic()
 
-        try:
-            with open(self.file_path, encoding="utf-8") as f:
-                data = json.load(f)
-            calendar = RollingEconomicCalendar.model_validate(data)
-            return calendar
-        except Exception as e:
-            logger.error(f"Failed to load or parse rolling economic calendar cache at {self.file_path}: {e}")
-            return None
-
-    def save(self, calendar: RollingEconomicCalendar) -> bool:
-        """
-        Atomically save rolling economic calendar to JSON file.
-        Uses write to temp file + fsync + os.replace.
-        """
-        target_dir = os.path.dirname(self.file_path)
-        os.makedirs(target_dir, exist_ok=True)
-
-        tmp_file = None
-        try:
-            # Create temp file in same directory for atomic replace
-            fd, tmp_file = tempfile.mkstemp(dir=target_dir, prefix="econ_cal_", suffix=".tmp")
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json_str = calendar.model_dump_json(indent=2)
-                f.write(json_str)
-                f.flush()
-                os.fsync(f.fileno())
-
-            os.replace(tmp_file, self.file_path)
-            logger.info(f"Successfully saved rolling economic calendar to {self.file_path}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to atomically save rolling economic calendar to {self.file_path}: {e}")
-            if tmp_file and os.path.exists(tmp_file):
-                try:
-                    os.remove(tmp_file)
-                except Exception:
-                    pass
-            return False
+    def stage(self, calendar: RollingEconomicCalendar) -> RollingEconomicCalendar:
+        self._pending = calendar.model_copy(deep=True)
+        return self._pending
 
     def is_stale(self, as_of: Optional[datetime] = None, max_age_hours: float = 36.0) -> bool:
         calendar = self.load()
@@ -333,7 +295,7 @@ class JsonEconomicCalendarStateStore:
             age = (now - gen_dt).total_seconds() / 3600.0
             return age > max_age_hours
         except Exception as e:
-            logger.warning(f"Could not parse generated_at in calendar cache: {e}")
+            logger.warning(f"Could not parse generated_at in calendar state: {e}")
             return True
 
     def events_between(
@@ -343,12 +305,12 @@ class JsonEconomicCalendarStateStore:
         as_of: Optional[date] = None
     ) -> Tuple[List[EconomicEvent], List[str], Optional[RollingEconomicCalendar]]:
         """
-        Query cached events scheduled between start_date and end_date (inclusive).
+        Query stored events scheduled between start_date and end_date (inclusive).
         Calculates dynamic days_remaining relative to as_of (default today in Europe/Istanbul).
         """
         calendar = self.load()
         if not calendar:
-            return [], ["Rolling economic calendar cache is missing or corrupt."], None
+            return [], ["Rolling economic calendar state is unavailable."], None
 
         tz_tr = ZoneInfo(calendar.timezone or settings.TIMEZONE)
         today = as_of or datetime.now(tz_tr).date()
@@ -378,20 +340,5 @@ class JsonEconomicCalendarStateStore:
         ))
 
         return filtered, list(calendar.warnings), calendar
-
-class SupabaseEconomicCalendarStateStore(JsonEconomicCalendarStateStore):
-    """Supabase-backed production facade preserving the state-store contract."""
-
-    def __init__(self) -> None:
-        super().__init__(file_path="supabase://economic_events")
-        self._pending: Optional[RollingEconomicCalendar] = None
-
-    def load(self) -> Optional[RollingEconomicCalendar]:
-        return self._pending or database_calendar_reader.load_economic()
-
-    def save(self, calendar: RollingEconomicCalendar) -> bool:
-        self._pending = calendar.model_copy(deep=True)
-        return True
-
 
 economic_calendar_state_store = SupabaseEconomicCalendarStateStore()

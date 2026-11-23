@@ -3,14 +3,11 @@ from datetime import date
 from app.models.earnings import (
     Bist100EarningsCalendar,
     BistEarningsEvent,
-    BistFiscalPeriodEarningsCalendar,
     KapEarningsFetchResult,
     OfficialIrIssue,
     OfficialIrProviderResult,
 )
-from app.services.bist_fiscal_period_archive import is_incoming_event_superior_or_newer
 from app.services.bist_reconciliation import (
-    BIST_DAILY_MIN_EARNINGS_DATE,
     reconcile_kap_and_official_ir,
     scope_official_ir_results,
 )
@@ -327,85 +324,6 @@ def test_reconciliation_conflicting_ir_dates_carries_forward_previous_reliable_c
     assert any("carried forward" in w.lower() for w in merged.warnings)
 
 
-def test_is_incoming_event_superior_or_newer_rules():
-    kap_ev = BistEarningsEvent(
-        symbol="TEST",
-        company_name="TEST",
-        fiscal_year=2026,
-        fiscal_period="Q1",
-        earnings_date="2026-05-01",
-        period_start="2026-01-01",
-        period_end="2026-03-31",
-        publish_date="2026-01-10",
-        disclosure_index=100,
-        source="KAP",
-        source_type="financial_calendar",
-        source_url="https://kap"
-    )
-    ir_ev = BistEarningsEvent(
-        symbol="TEST",
-        company_name="TEST",
-        fiscal_year=2026,
-        fiscal_period="Q1",
-        earnings_date="2026-05-02",
-        period_start="2026-01-01",
-        period_end="2026-03-31",
-        date_type="company_announced",
-        source="Official IR",
-        source_provider="TEST IR",
-        source_type="official_financial_calendar",
-        source_event_id="test:2026:Q1",
-        source_url="https://ir"
-    )
-    # KAP vs IR -> KAP always wins
-    assert is_incoming_event_superior_or_newer(inc_ev=kap_ev, cur_ev=ir_ev) is True
-    assert is_incoming_event_superior_or_newer(inc_ev=ir_ev, cur_ev=kap_ev) is False
-
-    # Newer KAP replaces older KAP
-    newer_kap = kap_ev.model_copy(update={"publish_date": "2026-01-20"})
-    assert is_incoming_event_superior_or_newer(inc_ev=newer_kap, cur_ev=kap_ev) is True
-    assert is_incoming_event_superior_or_newer(inc_ev=kap_ev, cur_ev=newer_kap) is False
-
-    # Incoming IR replaces same IR provider
-    newer_ir = ir_ev.model_copy(update={"earnings_date": "2026-05-05"})
-    assert is_incoming_event_superior_or_newer(inc_ev=newer_ir, cur_ev=ir_ev) is True
-
-
-def test_bist_fiscal_period_calendar_validation_aksa_company_announced():
-    data_aksa = {
-        "schema_version": "2.1",
-        "dataset_type": "fiscal_period_partition",
-        "generated_at": "2026-08-14T00:00:00Z",
-        "market": "BIST100",
-        "fiscal_year": 2026,
-        "fiscal_period": "Q1",
-        "status": "success",
-        "provider_status": "success",
-        "events": [
-            {
-                "symbol": "AKSA",
-                "company_name": "AKSA",
-                "fiscal_year": 2026,
-                "fiscal_period": "Q1",
-                "earnings_date": "2026-05-07",
-                "period_start": "2026-01-01",
-                "period_end": "2026-03-31",
-                "publish_date": None,
-                "date_type": "company_announced",
-                "source": "Official IR",
-                "source_provider": "AKSA Investor Relations",
-                "source_type": "official_financial_calendar",
-                "source_event_id": "aksa:2026:Q1",
-                "disclosure_index": None,
-                "source_url": "https://aksa"
-            }
-        ],
-        "warnings": []
-    }
-    cal_aksa = BistFiscalPeriodEarningsCalendar.model_validate(data_aksa)
-    assert cal_aksa.events[0].date_type == "company_announced"
-
-
 def test_reconciliation_historical_ir_conflict_excluded_outside_scope_does_not_make_status_partial():
     # MAVI Q1 2023 conflict: 2023-06-08 vs 2023-06-09
     ev1 = BistEarningsEvent(
@@ -631,7 +549,7 @@ def test_scope_official_ir_results_filters_by_earnings_date_not_fiscal_year():
         issues=[issue_hist, issue_global]
     )
 
-    scoped = scope_official_ir_results([raw_result], earnings_date_from=BIST_DAILY_MIN_EARNINGS_DATE)
+    scoped = scope_official_ir_results([raw_result], earnings_date_from=date(2026, 1, 1))
     assert len(scoped) == 1
     s_res = scoped[0]
 
@@ -662,7 +580,7 @@ def test_scope_official_ir_results_preserves_global_and_provider_failures():
         )]
     )
 
-    scoped = scope_official_ir_results([fail_res], earnings_date_from=BIST_DAILY_MIN_EARNINGS_DATE)
+    scoped = scope_official_ir_results([fail_res], earnings_date_from=date(2026, 1, 1))
     assert len(scoped) == 1
     assert scoped[0].status == "failed"
     assert scoped[0].parser_failed is True
@@ -695,7 +613,7 @@ def test_scope_official_ir_results_preserves_in_scope_row_validation_errors():
         issues=[in_scope_issue]
     )
 
-    scoped = scope_official_ir_results([res], earnings_date_from=BIST_DAILY_MIN_EARNINGS_DATE)
+    scoped = scope_official_ir_results([res], earnings_date_from=date(2026, 1, 1))
     assert len(scoped) == 1
     assert scoped[0].status == "partial"
     assert len(scoped[0].events) == 1

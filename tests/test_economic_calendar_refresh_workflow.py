@@ -37,7 +37,6 @@ def test_daily_economic_calendar_workflow():
     # Supabase is durable storage; workflow must not write rolling JSON to Git.
     assert wf["permissions"]["contents"] == "read"
     workflow_text = open(wf_path, encoding="utf-8").read()
-    assert "validate_economic_calendar_state" not in workflow_text
     assert "git add" not in workflow_text
     assert "git commit" not in workflow_text
     assert "git push" not in workflow_text

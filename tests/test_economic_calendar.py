@@ -248,13 +248,10 @@ async def test_get_rolling_calendar_warning_exact_deduplication():
 # ----------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_service_preserves_same_timestamp_different_periods(tmp_path):
+async def test_service_preserves_same_timestamp_different_periods():
     import json
     import os
 
-    from app.jobs.validate_economic_calendar_state import (
-        validate_economic_calendar_state_source,
-    )
     from app.providers.calendar.tuik_calendar import TuikCalendarProvider
 
     fixture_path = os.path.join(os.path.dirname(__file__), "fixtures", "economic_calendar", "tuik_annual_2026.json")
@@ -313,12 +310,6 @@ async def test_service_preserves_same_timestamp_different_periods(tmp_path):
         reloaded = RollingEconomicCalendar.model_validate_json(cal_json)
         assert len(reloaded.events) == 12
 
-        # Cache file validator accepts this calendar
-        temp_cache = tmp_path / "economic_calendar.json"
-        temp_cache.write_text(cal_json, encoding="utf-8")
-        is_valid, val_errors = validate_economic_calendar_state_source(temp_cache, require_current_coverage=False)
-        assert is_valid is True
-        assert len(val_errors) == 0
 
 
 def test_model_accepts_same_timestamp_different_periods():

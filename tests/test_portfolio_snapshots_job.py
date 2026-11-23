@@ -239,7 +239,7 @@ def test_default_date_remains_yesterday_even_when_execution_is_delayed(monkeypat
 def test_cli_routes_through_tracking_with_explicit_date_and_no_email(monkeypatch):
     factory = MagicMock()
     runner = MagicMock()
-    runner.run.side_effect = lambda business, **kwargs: business()
+    runner.run.side_effect = lambda business, **kwargs: business(None)
     tracking = MagicMock(return_value=runner)
     monkeypatch.setattr(portfolio_snapshots_job, "TrackedJobRunner", tracking)
     monkeypatch.setattr(portfolio_snapshots_job, "get_db_connection", lambda: _connection(fetchall=[]))

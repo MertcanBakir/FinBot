@@ -238,7 +238,7 @@ def test_schema_literal_constraints_alignment():
     migration_path = MIGRATIONS_DIR / "20260826004000_central_job_tracking_engine.sql"
     migration_sql = migration_path.read_text(encoding="utf-8")
 
-    latest_op_type_migration_path = MIGRATIONS_DIR / "20261120000000_push_notifications.sql"
+    latest_op_type_migration_path = MIGRATIONS_DIR / "20261123071952_remove_morning_closing_jobs.sql"
     latest_op_type_migration_sql = latest_op_type_migration_path.read_text(encoding="utf-8")
 
     baseline_path = MIGRATIONS_DIR / "20260825000000_baseline_schema.sql"

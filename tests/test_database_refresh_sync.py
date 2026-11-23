@@ -237,7 +237,7 @@ def test_sync_economic_refresh_success(mock_db_env):
         coverage_end="2026-11-16",
         status="success",
         sync_action="replaced",
-        state_source="data/generated/economic_calendar.json",
+        state_source="supabase://economic_events",
         diff=EconomicEventDiff(fetched_event_count=1, final_event_count=1),
         provider_outcomes=[
             EconomicProviderRefreshOutcome(
@@ -334,7 +334,7 @@ def test_exit_code_fails_on_database_error():
         coverage_end="2026-11-17",
         status="success",  # Business status is success
         sync_action="replaced",
-        state_source="data/generated/economic_calendar.json",
+        state_source="supabase://economic_events",
         diff=EconomicEventDiff(),
         database_status="failed",  # Database status failed
         database_error="Query failed",
@@ -371,7 +371,7 @@ def test_email_alerts_include_database_failure():
         coverage_end="2026-11-17",
         status="success",
         sync_action="replaced",
-        state_source="data/generated/economic_calendar.json",
+        state_source="supabase://economic_events",
         diff=EconomicEventDiff(),
         database_status="failed",
         database_error="Connection timed out",
@@ -437,7 +437,7 @@ def test_scoped_inactive_rules_economic(mock_db_env):
     with patch("app.repositories.refresh_repository.RefreshRepository.deactivate_missing_economic_events") as mock_deact:
         res = EconomicCalendarRefreshJobResult(
             generated_at="2026-08-18T04:30:00+03:00", coverage_start="2026-08-18", coverage_end="2026-11-16",
-            status="partial", sync_action="merged_and_updated", state_source="data/generated/economic_calendar.json",
+            status="partial", sync_action="merged_and_updated", state_source="supabase://economic_events",
             diff=EconomicEventDiff(),
             provider_outcomes=[
                 # Provider 1: success & validated -> SHOULD be deactivated
@@ -573,7 +573,7 @@ def test_assertion_error_is_reraised_during_db_sync(monkeypatch):
 
     econ_res = EconomicCalendarRefreshJobResult(
         generated_at="2026-08-18T04:30:00+03:00", coverage_start="2026-08-18", coverage_end="2026-11-16",
-        status="success", sync_action="replaced", state_source="data/generated/economic_calendar.json",
+        status="success", sync_action="replaced", state_source="supabase://economic_events",
         diff=EconomicEventDiff(),
     )
 
@@ -657,7 +657,7 @@ def test_economic_email_effective_status_when_db_failed():
         coverage_end="2026-11-16",
         status="success",  # Business status is success
         sync_action="replaced",
-        state_source="data/generated/economic_calendar.json",
+        state_source="supabase://economic_events",
         diff=EconomicEventDiff(),
         database_status="failed",  # Database status is failed
         database_error="Connection failed",
@@ -708,7 +708,7 @@ def test_email_view_retained_on_db_success_or_skipped():
             coverage_end="2026-11-16",
             status="success",
             sync_action="replaced",
-            state_source="data/generated/economic_calendar.json",
+            state_source="supabase://economic_events",
             diff=EconomicEventDiff(),
             database_status=db_st,
         )

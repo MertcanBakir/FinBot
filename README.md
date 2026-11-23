@@ -76,7 +76,7 @@ Takip edilen 91 günlük ekonomik takvim şu resmî kaynaklardan oluşturulur:
 
 Takvim yalnız tanımlı `TRACKED_EVENTS` listesindeki olayları içerir. Sağlayıcılardan biri geçici olarak hata verirse sağlıklı sağlayıcıların verisi işlenmeye devam eder; güvenilir eski kayıtlar kapsam içinde `carried_forward=true` ve `stale=true` olarak korunabilir.
 
-Production state `public.economic_events` tablosundadır. API ve sabah raporu canlı sağlayıcı çağrısı yapmadan Supabase state'ini okur.
+Production state `public.economic_events` tablosundadır. API, canlı sağlayıcı çağrısı yapmadan Supabase state'ini okur; state'i ekonomik takvim job'ı yeniler.
 
 ### Bilanço takvimi
 
@@ -86,7 +86,9 @@ Production state `public.economic_events` tablosundadır. API ve sabah raporu ca
 
 BIST tarafında yalnız şirket tarafından açıklanan planlı ilan tarihi kullanılır; mevzuat son gönderim tarihleri bilanço tarihi sayılmaz. KAP ve resmî IR sonuçları sembol bazında mutabakata tabi tutulur.
 
-Production state `public.earnings_events` tablosundadır. BIST mali dönem arşivi ayrıca `data/generated/earnings/bist100/` altında dönemsel JSON partition dosyaları olarak korunur.
+Production state BIST ve NASDAQ için `public.earnings_events` tablosundadır. Günlük job bugünden başlayarak sonraki 90 günü (toplam 91 takvim günü) Supabase'e yazar. Job kapsam içindeki eksik kayıtları pasifleştirir; kapsam dışındaki eski satırları silmez, bu nedenle Supabase'te daha önce kaydedilmiş geçmiş bilanço kayıtları korunur. API ise en son yenilemenin kapsamını sunar.
+
+Yerel BIST dönem arşivi ve manuel backfill job'ı kaldırılmıştır. Supabase'te daha önce bulunmayan geçmiş dönemler artık backfill ile tamamlanmaz.
 
 ### Portföy altyapısı
 
@@ -125,8 +127,6 @@ FinBot/
 │   ├── repositories/              # Supabase/PostgreSQL erişim katmanı
 │   └── services/
 │       └── job_tracking/          # Runner, adapter ve bildirim politikası
-├── data/generated/earnings/bist100/
-│                                    # Kalıcı BIST mali dönem arşivi
 ├── requirements/jobs/             # Job'a özel kilitli minimal bağımlılıklar
 ├── scripts/
 │   └── export_reference_seed.py   # Referans verilerini seed.sql'e aktarır
@@ -144,12 +144,13 @@ FinBot/
 
 ## Kurulum
 
-Python 3.11 production workflow'larında kullanılan sürümdür.
+FinBot geliştirme, test ve production için CPython 3.11 kullanır. Repo kökündeki
+`.python-version` sürümü 3.11 olarak sabitler. Yerel ortamı aynı sürümle kurun:
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate
-python -m pip install --requirement requirements.txt
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install --requirement requirements/dev.txt
 python -m pip check
 ```
 
@@ -200,8 +201,6 @@ API salt okunurdur; veri yenilemez ve e-posta göndermez.
 | Endpoint | Amaç |
 |---|---|
 | `GET /health` | Uygulama health check |
-| `GET /api/market-summary` | Güncel piyasa özeti; `?format=text` destekler |
-| `GET /api/bist-movers` | En çok yükselen/düşen üç BIST hissesi |
 
 ### Ekonomik takvim
 
@@ -235,8 +234,6 @@ Hafta, ay veya özel aralık istekleri Supabase'deki 91 günlük kapsamla hiç k
 |---|---|---|
 | `economic_calendar_refresh_job` | Her gün 07:30 Türkiye | Her tamamlanmada özet |
 | `earnings_refresh_job` | Her gün 08:00 Türkiye | Her tamamlanmada özet |
-| `morning_job` | Hafta içi 10:25 Türkiye | Her tamamlanmada özet |
-| `closing_job` | Hafta içi 18:30 Türkiye | Her tamamlanmada özet |
 | `binance_crypto_latest_prices_job` | Her gün 08:17–00:17, iki saatte bir | Partial/failed |
 | `bist_latest_prices_job` | Hafta içi 10:30, 12:30, 14:30, 16:30, 18:30 | Partial/failed |
 | `nasdaq_latest_prices_job` | Hafta içi `14:30–21:30 UTC`, saat başı aday tetikleme | Partial/failed |
@@ -246,10 +243,9 @@ Hafta, ay veya özel aralık istekleri Supabase'deki 91 günlük kapsamla hiç k
 
 Ek işler:
 
-- `bist_earnings_backfill_job`: Manuel BIST mali dönem arşiv backfill'i.
 - `database_health_check`: Manuel ve salt-okunur şema kontrolü.
 
-### Fiyat, snapshot ve piyasa özeti job komutları
+### Fiyat ve snapshot job komutları
 
 Fiyat ve snapshot job'larında varsayılan davranış dry-run'dır:
 
@@ -292,16 +288,11 @@ Yerel gerçek PostgreSQL kabul testi (geçici cluster, canlı bağlantı yok):
 RUN_SNAPSHOT_POSTGRES=1 python -m pytest --allow-hosts=127.0.0.1 -q tests/test_daily_snapshot_postgres.py
 ```
 
-Piyasa özeti ve takvim job'ları:
+Takvim job'ları:
 
 ```bash
-python -m app.jobs.morning_job
-python -m app.jobs.morning_job --dry-run
-python -m app.jobs.closing_job
-python -m app.jobs.closing_job --dry-run
 python -m app.jobs.economic_calendar_refresh_job --dry-run
 python -m app.jobs.earnings_refresh_job --dry-run
-python -m app.jobs.bist_earnings_backfill_job --year 2026
 python -m app.jobs.database_health_check
 ```
 
@@ -352,7 +343,7 @@ Yalnız gerçekten çok sağlayıcılı işler için alt kırılım tutar:
 - Ekonomik takvim: TÜİK, TCMB, BLS, BEA ve Fed
 - Bilanço takvimi: KAP, resmî IR ve Yahoo Finance
 
-Tek sağlayıcılı fiyat job'ları ile sabah/kapanış piyasa özeti job'ları bu tabloda gereksiz alt kayıt oluşturmaz; yalnızca `refresh_runs` kullanılır.
+Tek sağlayıcılı fiyat job'ları bu tabloda gereksiz alt kayıt oluşturmaz; yalnızca `refresh_runs` kullanır.
 
 ### Bildirim politikaları
 
@@ -363,7 +354,7 @@ Tek sağlayıcılı fiyat job'ları ile sabah/kapanış piyasa özeti job'ları 
 - `failed`: Hata e-postası
 - `skipped`: E-posta yok
 
-`ALWAYS_ON_FINISH` sabah/kapanış piyasa özetleri ile ekonomik ve bilanço takvimi job'larında kullanılır; başarılı, kısmi ve hatalı tamamlanmalarda e-posta gönderir.
+`ALWAYS_ON_FINISH` ekonomik ve bilanço takvimi job'larında kullanılır; başarılı, kısmi ve hatalı tamamlanmalarda e-posta gönderir.
 
 Ortak kurallar:
 
@@ -383,7 +374,7 @@ Mobil uygulamanın arka plan işlerinin durumunu güvenli ve deterministik izlem
 - **Fail-Closed**: `auth.uid() IS NULL` durumunda sabit `authentication_required` hatası fırlatılır.
 - **Tablo İzolasyonu**: `refresh_runs` ve `provider_run_results` tablolarına doğrudan `SELECT` erişimi kapalı kalır.
 - **Hassas Veri Koruması**: Teknik `job_name`, ham hata/uyarı metinleri, GitHub run ID'leri, bildirim durumları ve UUID'ler mobil sözleşmeye dahil edilmez.
-- **Kapsam**: Tabloda hiç kayıt olmasa dahi allowlist'teki 10 job'ın her biri için tam 1 satır üretir.
+- **Kapsam**: Tabloda hiç kayıt olmasa dahi allowlist'teki 8 job'ın her biri için tam 1 satır üretir.
 
 #### Mobil Sözleşme Kolonları (13 Kolon)
 
@@ -411,8 +402,6 @@ Mobil uygulamanın arka plan işlerinin durumunu güvenli ve deterministik izlem
 | `EARNINGS_CALENDAR` | `calendar` | `Finansal Sonuç Takvimi` | 36 saat | 48 saat |
 | `ECONOMIC_CALENDAR` | `calendar` | `Ekonomik Takvim` | 36 saat | 48 saat |
 | `PORTFOLIO_SNAPSHOTS` | `portfolio` | `Portföy Değerleme` | 36 saat | 48 saat |
-| `MORNING_SUMMARY` | `summary` | `Sabah Piyasa Özeti` | 76 saat | 96 saat |
-| `CLOSING_SUMMARY` | `summary` | `Kapanış Piyasa Özeti` | 76 saat | 96 saat |
 
 ## Supabase Şeması
 

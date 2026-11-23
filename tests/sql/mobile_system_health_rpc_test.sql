@@ -202,8 +202,8 @@ BEGIN
     IF NOT v_caught_auth_select_rr OR NOT v_caught_auth_select_prr THEN
         RAISE EXCEPTION 'Role Test Failed: authenticated was able to directly SELECT operational tables';
     END IF;
-    IF v_auth_rows <> 10 THEN
-        RAISE EXCEPTION 'Role Test Failed: authenticated with valid UID returned % rows, expected 10', v_auth_rows;
+    IF v_auth_rows <> 8 THEN
+        RAISE EXCEPTION 'Role Test Failed: authenticated with valid UID returned % rows, expected 8', v_auth_rows;
     END IF;
 END $$;
 
@@ -214,7 +214,7 @@ SELECT set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000001
 DELETE FROM public.refresh_runs WHERE job_name IN (
     'bist_latest_prices_job', 'nasdaq_latest_prices_job', 'binance_crypto_latest_prices_job',
     'tefas_latest_prices_job', 'fx_latest_price_job', 'earnings_refresh_job',
-    'economic_calendar_refresh_job', 'portfolio_snapshots_job', 'morning_job', 'closing_job',
+    'economic_calendar_refresh_job', 'portfolio_snapshots_job',
     'internal_fake_unallowed_job'
 );
 
@@ -231,7 +231,7 @@ BEGIN
     INTO v_count, v_unknown_count, v_distinct_checked_at_count
     FROM public.get_mobile_system_health();
 
-    IF v_count <> 10 OR v_unknown_count <> 10 OR v_distinct_checked_at_count <> 1 THEN
+    IF v_count <> 8 OR v_unknown_count <> 8 OR v_distinct_checked_at_count <> 1 THEN
         RAISE EXCEPTION 'Empty Table Test Failed: count=%, unknown=%, checked_at_distinct=%', v_count, v_unknown_count, v_distinct_checked_at_count;
     END IF;
 END $$;
@@ -315,30 +315,6 @@ INSERT INTO public.refresh_runs (
     'skipped', 'skipped', now() - interval '50 hours', now() - interval '49 hours 59 minutes', now() - interval '50 hours', now() - interval '49 hours 59 minutes'
 );
 
--- 9. morning_job: Deterministic Tie-Break Test (identical started_at & created_at, differing status/finished_at/UUID)
--- Record A (lower UUID): success, finished 1h50m ago
-INSERT INTO public.refresh_runs (
-    id, job_name, operation_type, scope, status, sync_action, started_at, finished_at, created_at, updated_at
-) VALUES (
-    '10000000-0000-0000-0000-000000000011', 'morning_job', 'market_summary', 'MARKET_SUMMARY',
-    'success', 'no_op', now() - interval '2 hours', now() - interval '1 hour 50 minutes', now() - interval '2 hours', now() - interval '1 hour 50 minutes'
-);
--- Record B (higher UUID): partial, finished 1h40m ago -> id DESC MUST pick this record!
-INSERT INTO public.refresh_runs (
-    id, job_name, operation_type, scope, status, sync_action, started_at, finished_at, created_at, updated_at
-) VALUES (
-    '10000000-0000-0000-0000-000000000012', 'morning_job', 'market_summary', 'MARKET_SUMMARY',
-    'partial', 'partial_update', now() - interval '2 hours', now() - interval '1 hour 40 minutes', now() - interval '2 hours', now() - interval '1 hour 40 minutes'
-);
-
--- 10. closing_job: Failed with NO previous success -> critical / JOB_FAILED
-INSERT INTO public.refresh_runs (
-    id, job_name, operation_type, scope, status, sync_action, error, started_at, finished_at, created_at, updated_at
-) VALUES (
-    '10000000-0000-0000-0000-000000000013', 'closing_job', 'market_summary', 'MARKET_SUMMARY',
-    'failed', 'failed_no_write', 'Initial crash', now() - interval '30 minutes', now() - interval '29 minutes', now() - interval '30 minutes', now() - interval '29 minutes'
-);
-
 -- Unallowed fake job (must be ignored)
 INSERT INTO public.refresh_runs (
     id, job_name, operation_type, scope, status, sync_action, started_at, finished_at, created_at, updated_at
@@ -375,8 +351,8 @@ BEGIN
         RAISE EXCEPTION 'Read-Only Test Failed: Row count changed across RPC call';
     END IF;
 
-    IF v_total_rows <> 10 OR v_unique_codes <> 10 THEN
-        RAISE EXCEPTION 'Allowlist Test Failed: Expected 10 unique job rows, got total=%, unique=%', v_total_rows, v_unique_codes;
+    IF v_total_rows <> 8 OR v_unique_codes <> 8 THEN
+        RAISE EXCEPTION 'Allowlist Test Failed: Expected 8 unique job rows, got total=%, unique=%', v_total_rows, v_unique_codes;
     END IF;
 
     IF v_neg_durations > 0 THEN
@@ -434,17 +410,7 @@ BEGIN
         RAISE EXCEPTION 'Portfolio snapshot assertion failed: %', r;
     END IF;
 
-    -- 9. Morning job: Deterministic Tie-Break Test (Record B with higher UUID must win)
-    SELECT * INTO r FROM public.get_mobile_system_health() WHERE job_code = 'MORNING_SUMMARY';
-    IF r.execution_status <> 'partial' THEN
-        RAISE EXCEPTION 'Morning job tie-break failed: expected partial from higher UUID record, got %', r;
-    END IF;
 
-    -- 10. Closing job: Failed with NO previous success -> critical / JOB_FAILED
-    SELECT * INTO r FROM public.get_mobile_system_health() WHERE job_code = 'CLOSING_SUMMARY';
-    IF r.health_status <> 'critical' OR r.execution_status <> 'failed' OR r.message_code <> 'JOB_FAILED' OR r.last_success_at IS NOT NULL THEN
-        RAISE EXCEPTION 'Closing job assertion failed: %', r;
-    END IF;
 END $$;
 
 ROLLBACK;

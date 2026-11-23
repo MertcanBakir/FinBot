@@ -1,4 +1,3 @@
-import json
 from datetime import date, datetime, timedelta
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -17,7 +16,6 @@ from app.models.earnings import (
     NasdaqEarningsCalendar,
     NasdaqEarningsEvent,
 )
-from app.services.calendar_state_store import JsonCalendarStateStore
 
 client = TestClient(app)
 
@@ -892,37 +890,6 @@ def test_combined_volatile_disk_side_effect_guarantee(mock_now):
 # =============================================================================
 # PART 4: Real Loader Unknown Session & Model Validation Tests
 # =============================================================================
-
-def test_unknown_nasdaq_session_real_loader_returns_none(tmp_path):
-    """Test with a real temporary JSON file: unknown session value causes load_nasdaq() to fail safely and return None."""
-    bad_data = {
-        "schema_version": "2.0",
-        "generated_at": "2026-08-18T10:00:00+03:00",
-        "coverage_start": "2026-08-01",
-        "coverage_end": "2026-10-31",
-        "market": "NASDAQ100",
-        "status": "success",
-        "provider_status": "success",
-        "events": [
-            {
-                "symbol": "NVDA",
-                "company_name": "Nvidia",
-                "earnings_date": "2026-08-18",
-                "session": "mystery_session",  # Invalid session!
-                "session_label": "Mystery",
-                "source": "Yahoo Finance",
-            }
-        ],
-        "warnings": [],
-    }
-
-    temp_nasdaq_file = tmp_path / "test_nasdaq_corrupt.json"
-    temp_nasdaq_file.write_text(json.dumps(bad_data), encoding="utf-8")
-
-    temp_cache = JsonCalendarStateStore(nasdaq_file_path=str(temp_nasdaq_file))
-    loaded = temp_cache.load_nasdaq()
-    assert loaded is None
-
 
 def test_unknown_nasdaq_session_causes_model_validation_failure():
     """Unknown session is rejected directly by NasdaqEarningsEvent model."""

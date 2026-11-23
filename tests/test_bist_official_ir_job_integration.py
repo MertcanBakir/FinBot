@@ -8,7 +8,6 @@ from zoneinfo import ZoneInfo
 import httpx
 import pytest
 
-from app.jobs.bist_earnings_backfill_job import run_bist_earnings_backfill
 from app.jobs.earnings_refresh_job import EarningsRefreshJob
 from app.jobs.official_ir_smoke_job import run_official_ir_smoke_test
 from app.models.earnings import (
@@ -24,13 +23,10 @@ from app.providers.earnings.official_ir.registry import OfficialIrRegistry
 from app.services.bist100_earnings import (
     Bist100EarningsService,
 )
-from app.services.bist_fiscal_period_archive import BistFiscalPeriodArchive
-from app.services.calendar_state_store import (
-    JsonCalendarStateStore,
-    merge_bist_partial_calendar,
-)
+from app.services.calendar_state_store import merge_bist_partial_calendar
 from app.services.earnings_refresh_report import format_earnings_refresh_email
 from tests.conftest import create_mock_db_connection
+from tests.state_store_fakes import MemoryCalendarStateStore
 
 
 @pytest.fixture(autouse=True)
@@ -86,14 +82,8 @@ class MockNasdaqService:
 
 @pytest.mark.asyncio
 async def test_job_integration_official_ir_comprehensive_counters_calculation():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        cache_dir = os.path.join(tmpdir, "state_store")
-        partition_dir = os.path.join(tmpdir, "partitions")
-        os.makedirs(cache_dir, exist_ok=True)
-        os.makedirs(partition_dir, exist_ok=True)
-
-        rolling_cache = JsonCalendarStateStore(cache_dir=cache_dir)
-        part_cache = BistFiscalPeriodArchive(data_dir=partition_dir)
+    with tempfile.TemporaryDirectory():
+        rolling_cache = MemoryCalendarStateStore()
 
         # 1. Prepare KAP Events (4 normalized events)
         # KAP1: Rolling coverage
@@ -231,7 +221,6 @@ async def test_job_integration_official_ir_comprehensive_counters_calculation():
             bist_service=bist_svc,
             nasdaq_service=nasdaq_svc,  # type: ignore
             state_store=rolling_cache,
-            fiscal_archive=part_cache,
             email_service=mock_email_svc
         )
 
@@ -245,11 +234,11 @@ async def test_job_integration_official_ir_comprehensive_counters_calculation():
         # Verify all scoped and identity metrics exactly:
         assert ir_summary.kap_normalized_event_count == 4
         assert ir_summary.kap_rolling_event_count == 3
-        assert ir_summary.ir_provider_raw_event_count == 8
-        assert ir_summary.ir_normalized_event_count == 3
+        assert ir_summary.ir_provider_raw_event_count == 5
+        assert ir_summary.ir_normalized_event_count == 2
         assert ir_summary.ir_rolling_event_count == 2
         assert ir_summary.combined_rolling_event_count == 5
-        assert ir_summary.events_added_from_ir_count == 3
+        assert ir_summary.events_added_from_ir_count == 2
         assert ir_summary.events_overridden_by_kap_count == 2
         assert ir_summary.kap_ir_conflicts_count == 1
         assert ir_summary.ir_carried_forward_count == 0
@@ -257,14 +246,8 @@ async def test_job_integration_official_ir_comprehensive_counters_calculation():
 
 @pytest.mark.asyncio
 async def test_job_integration_with_official_ir_carry_forward_and_email_rendering():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        cache_dir = os.path.join(tmpdir, "state_store")
-        partition_dir = os.path.join(tmpdir, "partitions")
-        os.makedirs(cache_dir, exist_ok=True)
-        os.makedirs(partition_dir, exist_ok=True)
-
-        rolling_cache = JsonCalendarStateStore(cache_dir=cache_dir)
-        part_cache = BistFiscalPeriodArchive(data_dir=partition_dir)
+    with tempfile.TemporaryDirectory():
+        rolling_cache = MemoryCalendarStateStore()
 
         # Pre-seed rolling state_store with an Official IR event for AKSA
         prev_aksa = BistEarningsEvent(
@@ -282,7 +265,7 @@ async def test_job_integration_with_official_ir_carry_forward_and_email_renderin
             events=[prev_aksa],
             symbol_results=[]
         )
-        rolling_cache.save_bist(prev_calendar)
+        rolling_cache.stage_bist(prev_calendar)
 
         # KAP returns empty
         kap_res = KapEarningsFetchResult(status="success", events=[], normalized_events=[], warnings=[])
@@ -306,7 +289,6 @@ async def test_job_integration_with_official_ir_carry_forward_and_email_renderin
             bist_service=bist_svc,
             nasdaq_service=nasdaq_svc,  # type: ignore
             state_store=rolling_cache,
-            fiscal_archive=part_cache,
             email_service=mock_email_svc
         )
 
@@ -533,14 +515,8 @@ def test_smoke_cli_main_entrypoint():
 
 @pytest.mark.asyncio
 async def test_job_integration_historical_mavi_conflict_does_not_make_rolling_job_partial():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        cache_dir = os.path.join(tmpdir, "state_store")
-        partition_dir = os.path.join(tmpdir, "partitions")
-        os.makedirs(cache_dir, exist_ok=True)
-        os.makedirs(partition_dir, exist_ok=True)
-
-        rolling_cache = JsonCalendarStateStore(cache_dir=cache_dir)
-        part_cache = BistFiscalPeriodArchive(data_dir=partition_dir)
+    with tempfile.TemporaryDirectory():
+        rolling_cache = MemoryCalendarStateStore()
 
         # KAP returns 1 event in 2026 rolling coverage
         kap_ev = BistEarningsEvent(
@@ -589,7 +565,6 @@ async def test_job_integration_historical_mavi_conflict_does_not_make_rolling_jo
             bist_service=bist_svc,
             nasdaq_service=nasdaq_svc,  # type: ignore
             state_store=rolling_cache,
-            fiscal_archive=part_cache,
             email_service=mock_email_svc
         )
 
@@ -612,9 +587,8 @@ def test_central_smtp_security_gate_blocks_real_smtp():
 @pytest.mark.asyncio
 async def test_job_uses_mock_email_service_and_never_touches_real_smtp():
     """Verify that EarningsRefreshJob with configured mock EmailService invokes mock without touching real SMTP."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        rolling_cache = JsonCalendarStateStore(cache_dir=os.path.join(tmpdir, "state_store"))
-        part_cache = BistFiscalPeriodArchive(data_dir=os.path.join(tmpdir, "partitions"))
+    with tempfile.TemporaryDirectory():
+        rolling_cache = MemoryCalendarStateStore()
 
         kap_res = KapEarningsFetchResult(status="success", events=[], normalized_events=[], warnings=[])
         mock_kap = MockKapProvider(kap_res)
@@ -629,7 +603,6 @@ async def test_job_uses_mock_email_service_and_never_touches_real_smtp():
             bist_service=bist_svc,
             nasdaq_service=nasdaq_svc,  # type: ignore
             state_store=rolling_cache,
-            fiscal_archive=part_cache,
             email_service=mock_email_svc
         )
 
@@ -643,8 +616,8 @@ async def test_job_uses_mock_email_service_and_never_touches_real_smtp():
 
 
 @pytest.mark.asyncio
-async def test_job_integration_mavi_full_html_daily_refresh_and_backfill_isolation():
-    """Verify end-to-end that MAVI provider parsing full page isolates historical warnings from daily refresh and backfill."""
+async def test_job_integration_mavi_full_html_daily_refresh():
+    """Verify end-to-end that MAVI provider parsing works through the daily refresh."""
     fixture_path = os.path.join(os.path.dirname(__file__), "fixtures", "official_ir", "mavi_2026.html")
     with open(fixture_path, encoding="utf-8") as f:
         mavi_html = f.read()
@@ -655,9 +628,8 @@ async def test_job_integration_mavi_full_html_daily_refresh_and_backfill_isolati
         async def fetch_calendar(self, client=None):
             return self.parse_html(mavi_html)
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        rolling_cache = JsonCalendarStateStore(cache_dir=os.path.join(tmpdir, "state_store"))
-        part_cache = BistFiscalPeriodArchive(data_dir=os.path.join(tmpdir, "partitions"))
+    with tempfile.TemporaryDirectory():
+        rolling_cache = MemoryCalendarStateStore()
 
         kap_res = KapEarningsFetchResult(status="success", events=[], normalized_events=[], warnings=[])
         mock_kap = MockKapProvider(kap_res)
@@ -674,7 +646,6 @@ async def test_job_integration_mavi_full_html_daily_refresh_and_backfill_isolati
             bist_service=bist_svc,
             nasdaq_service=nasdaq_svc,  # type: ignore
             state_store=rolling_cache,
-            fiscal_archive=part_cache,
             email_service=mock_email_svc
         )
 
@@ -690,31 +661,7 @@ async def test_job_integration_mavi_full_html_daily_refresh_and_backfill_isolati
         assert mavi_prov.symbol == "MAVI"
         assert mavi_prov.status == "success"
         assert mavi_prov.warnings == []
-        assert job_result.bist.official_ir_summary.ir_normalized_event_count == 3
+        assert job_result.bist.official_ir_summary.ir_normalized_event_count == 1
         assert "MAVI" not in job_result.bist.unavailable_symbols
         assert not any("MAVI" in w for w in job_result.bist.warnings)
-
-        # 2. Check partitions created
-        partition_files = os.listdir(os.path.join(tmpdir, "partitions"))
-        # Should have only FY_2025 (announced in 2026), Q2_2026, Q3_2026
-        assert "bist100_FY_2025_earnings_calendar.json" in partition_files
-        assert "bist100_Q2_2026_earnings_calendar.json" in partition_files
-        assert "bist100_Q3_2026_earnings_calendar.json" in partition_files
-        # Must NOT have created 2023 or 2024 partition files
-        assert not any("2023" in pf or "2024" in pf for pf in partition_files)
-
-        # 3. Backfill job isolation check
-        backfill_part_cache = BistFiscalPeriodArchive(data_dir=os.path.join(tmpdir, "backfill_partitions"))
-        exit_code = await run_bist_earnings_backfill(
-            year=2026,
-            provider=mock_kap,  # type: ignore
-            ir_registry=ir_reg,
-            fiscal_archive=backfill_part_cache
-        )
-        assert exit_code == 0
-        bf_files = os.listdir(os.path.join(tmpdir, "backfill_partitions"))
-        assert "bist100_FY_2025_earnings_calendar.json" in bf_files
-        assert "bist100_Q2_2026_earnings_calendar.json" in bf_files
-        assert "bist100_Q3_2026_earnings_calendar.json" in bf_files
-        assert not any("2023" in pf or "2024" in pf for pf in bf_files)
 

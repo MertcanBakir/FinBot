@@ -8,7 +8,6 @@ from app.models.earnings import (
     NasdaqEarningsEvent,
 )
 from app.models.earnings_refresh import (
-    BistArchiveRefreshOutcome,
     EarningsEventChangeDetail,
     EarningsEventDiff,
     EarningsRefreshJobResult,
@@ -293,8 +292,8 @@ def test_official_ir_aggregate_status_decision_table():
 
 # --- 2. Exact Warning Deduplication Across All 5 Locations Test ---
 
-def test_format_earnings_refresh_email_exact_error_deduplication_all_five_locations():
-    """Verify that identical warning string in 5 different result locations is deduplicated to count=1."""
+def test_format_earnings_refresh_email_exact_error_deduplication():
+    """Verify that identical warning string in multiple result locations is deduplicated to count=1."""
     exact_msg = "CRITICAL_SHARED_DATABASE_TIMEOUT"
 
     ir_provider = OfficialIrProviderSummary(
@@ -304,12 +303,6 @@ def test_format_earnings_refresh_email_exact_error_deduplication_all_five_locati
         parser_failed=False,
         retry_count=2,
         warnings=[exact_msg]
-    )
-
-    archive_outcome = BistArchiveRefreshOutcome(
-        archive_status="failed",
-        error=exact_msg,
-        warnings=[exact_msg, "Different Archive Warning"]
     )
 
     result = EarningsRefreshJobResult(
@@ -332,7 +325,6 @@ def test_format_earnings_refresh_email_exact_error_deduplication_all_five_locati
                 kap_fetch_status="failed",
                 providers=[ir_provider]
             ),
-            archive_outcome=archive_outcome
         ),
         nasdaq=MarketRefreshOutcome(
             market="NASDAQ100",
@@ -353,7 +345,6 @@ def test_format_earnings_refresh_email_exact_error_deduplication_all_five_locati
 
     # 2. Distinct warnings must still be preserved
     assert "Different BIST Warning" in text_body
-    assert "Different Archive Warning" in text_body
 
     # 3. Provider clean reason in Data Sources must be clean and not raw warning
     assert "MAVI: Sağlayıcı hatası (2 tekrar denemesi)" in text_body

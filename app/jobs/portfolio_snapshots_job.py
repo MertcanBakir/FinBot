@@ -113,7 +113,7 @@ def run_job(
     )
 
     return runner.run(
-        lambda: _execute_portfolio_snapshots_job(
+        lambda _ctx: _execute_portfolio_snapshots_job(
             args=args,
             email_service=email_svc,
         ),

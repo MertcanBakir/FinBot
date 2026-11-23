@@ -38,7 +38,7 @@ def _build_job_result(
         coverage_end="2026-11-15",
         status=status,
         sync_action="replaced" if status == "success" else "merged_and_updated",
-        state_source="dummy_path.json",
+        state_source="supabase://economic_events",
         diff=diff,
         provider_outcomes=provider_outcomes or [
             EconomicProviderRefreshOutcome(provider_id="TUIK", provider_name="TÜİK", status="success", event_count=3),
@@ -111,20 +111,3 @@ def test_report_html_escaping_and_truncation():
     assert "&lt;script&gt;" in html_body
     assert "... ve 5 kayıt daha" in html_body
     assert "... ve 5 kayıt daha" in text_body
-
-
-def test_report_state_write_failed_warning_formatting():
-    from app.jobs.economic_calendar_refresh_job import STATE_WRITE_FAILED_WARNING
-    r = _build_job_result(
-        status="failed",
-        warnings=[STATE_WRITE_FAILED_WARNING]
-    )
-    r.sync_action = "write_failed"
-
-    text_body = format_economic_calendar_refresh_email_text(r)
-    html_body = format_economic_calendar_refresh_email_html(r)
-
-    assert text_body.count(STATE_WRITE_FAILED_WARNING) == 1
-    assert html_body.count(STATE_WRITE_FAILED_WARNING) == 1
-    assert "Rolling economic calendar state save failed to write to disk" in text_body
-    assert "Rolling economic calendar state save failed to write to disk" in html_body
