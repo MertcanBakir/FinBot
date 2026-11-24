@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_fx_workflow_uses_isolated_requirements_and_expected_schedule():
     workflow = yaml.safe_load((ROOT / ".github/workflows/fx-latest-price.yml").read_text())
     trigger = workflow.get("on") or workflow.get(True)
-    assert trigger["schedule"][0]["cron"] == "27 5,7,9,11,13,15,17,19,21 * * 1-5"
+    assert trigger["schedule"][0]["cron"] == "27 5-21 * * 1-5"
     content = (ROOT / ".github/workflows/fx-latest-price.yml").read_text()
     assert "requirements/jobs/fx.txt" in content
     assert "app.jobs.fx_latest_price_job --apply-db" in content

@@ -924,7 +924,7 @@ def test_github_actions_cron_schedule():
     # Validate schedule cron expression
     on_section = data.get("on") or data.get(True)
     cron_expr = on_section["schedule"][0]["cron"]
-    assert cron_expr == "17 5,7,9,11,13,15,17,19,21 * * *"
+    assert cron_expr == "17 * * * *"
 
 
 def test_crypto_provider_request_executed_lifecycle_paths():
