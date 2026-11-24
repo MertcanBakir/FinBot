@@ -2,9 +2,8 @@ name: Binance Crypto Latest Prices Daily Sync
 
 on:
   schedule:
-    # 7 days a week at Turkey Time: 08:17, 10:17, 12:17, 14:17, 16:17, 18:17, 20:17, 22:17, 00:17
-    # (UTC+3 -> UTC: 05:17, 07:17, 09:17, 11:17, 13:17, 15:17, 17:17, 19:17, 21:17)
-    - cron: "17 5,7,9,11,13,15,17,19,21 * * *"
+    # Every hour, seven days a week; offset avoids the top of the hour.
+    - cron: "17 * * * *"
   workflow_dispatch:
 
 concurrency:

@@ -2,9 +2,8 @@ name: BIST100 Latest Prices Sync
 
 on:
   schedule:
-    # Monday to Friday at Turkey Time: 10:30, 12:30, 14:30, 16:30, 18:30
-    # (UTC+3 -> UTC: 07:30, 09:30, 11:30, 13:30, 15:30)
-    - cron: "30 7,9,11,13,15 * * 1-5"
+    # Weekdays 10:10–18:40 Turkey time, every 30 minutes.
+    - cron: "10,40 7-15 * * 1-5"
   workflow_dispatch:
 
 concurrency:

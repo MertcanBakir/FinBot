@@ -2,8 +2,8 @@ name: USDTRY Latest Price Sync
 
 on:
   schedule:
-    # Weekdays at 08:27..00:27 Turkey time; offset avoids other price jobs.
-    - cron: "27 5,7,9,11,13,15,17,19,21 * * 1-5"
+    # Weekdays hourly 08:27–00:27 Turkey time (last run is next day).
+    - cron: "27 5-21 * * 1-5"
   workflow_dispatch:
 
 concurrency:
