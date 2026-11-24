@@ -43,7 +43,7 @@ function responseFailure(status: number): string {
   return status === 429 || status >= 500 ? "retry" : "permanent";
 }
 
-async function boundedFetch(
+export async function boundedFetch(
   fetchImpl: typeof fetch,
   url: string,
   init: RequestInit,
@@ -51,7 +51,13 @@ async function boundedFetch(
 ): Promise<Response> {
   const timeout = timeoutSignal(timeoutMs);
   try {
-    return await fetchImpl(url, { ...init, signal: timeout.signal });
+    const response = await fetchImpl(url, { ...init, signal: timeout.signal });
+    const body = await response.text();
+    return new Response(body || null, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
   } finally {
     timeout.clear();
   }

@@ -1254,7 +1254,7 @@ def test_github_actions_cron_schedule():
 
     on_section = data.get("on") or data.get(True)
     cron_expr = on_section["schedule"][0]["cron"]
-    assert cron_expr == "30 7,9,11,13,15 * * 1-5"
+    assert cron_expr == "10,40 7-15 * * 1-5"
 
 
 # ---------------------------------------------------------------------------
