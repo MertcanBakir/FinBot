@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  boundedFetch,
   createHandler,
 } from "../../supabase/functions/push-notifications-worker/index.ts";
 import {
@@ -12,6 +13,18 @@ import {
 
 const workerSecret = "test-only-secret-value-that-is-long-enough";
 const projectId = "123e4567-e89b-42d3-a456-426614174000";
+
+test("request timeout also bounds a stalled response body", async () => {
+  const fetchImpl = async (_url, { signal }) => new Response(
+    new ReadableStream({
+      start(controller) {
+        signal.addEventListener("abort", () => controller.error(new Error("aborted")));
+      },
+    }),
+    { status: 200 },
+  );
+  await assert.rejects(boundedFetch(fetchImpl, "https://example.test", {}, 20), /aborted/);
+});
 
 function environment(overrides = {}) {
   const values = {
