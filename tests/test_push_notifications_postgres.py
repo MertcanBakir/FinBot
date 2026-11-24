@@ -157,6 +157,22 @@ def register(conn, user, project, token=None):
         ).fetchone()["id"]
 
 
+def test_same_user_can_rebind_token_after_reinstall_but_other_user_cannot(db):
+    conn, _, user, other, project = db
+    token = "ExponentPushToken[" + uuid4().hex + "]"
+    first_id = register(conn, user, project, token)
+    second_id = register(conn, user, project, token)
+    assert second_id == first_id
+    assert conn.execute(
+        "SELECT count(*) AS n FROM notifications.devices WHERE user_id=%s", (user,)
+    ).fetchone()["n"] == 1
+    with pytest.raises(psycopg.Error, match="notification_device_conflict"):
+        register(conn, other, project, token)
+    assert conn.execute(
+        "SELECT user_id FROM notifications.devices WHERE id=%s", (first_id,)
+    ).fetchone()["user_id"] == user
+
+
 def test_rpc_auth_isolation_and_privileges(db):
     conn, _, a, b, project = db
     device = register(conn, a, project)
