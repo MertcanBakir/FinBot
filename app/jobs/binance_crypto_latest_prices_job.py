@@ -6,7 +6,7 @@ from app.core.database import get_db_connection
 from app.models.crypto_prices import (
     CryptoPricesJobResult,
 )
-from app.models.job_tracking import JobRunSpecification
+from app.models.job_tracking import JobRunContext, JobRunSpecification
 from app.providers.crypto.binance_price_provider import (
     BinancePriceProvider,
 )
@@ -113,6 +113,7 @@ def run_job(
     service: Optional[CryptoPricesService] = None,
     email_service: Optional[EmailService] = None,
     db_connection_factory: Optional[Any] = None,
+    run_context: Optional[JobRunContext] = None,
 ) -> CryptoPricesJobResult:
     """Execute the Binance cryptocurrency latest prices synchronization job."""
     parser = argparse.ArgumentParser(
@@ -160,6 +161,7 @@ def run_job(
         ),
         dry_run=is_dry_run,
         no_email=args.no_email,
+        context=run_context,
     )
     _print_summary(result)
     return result

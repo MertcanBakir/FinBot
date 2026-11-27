@@ -230,11 +230,11 @@ Hafta, ay veya özel aralık istekleri Supabase'deki 91 günlük kapsamla hiç k
 
 ## Production Job'ları
 
-| Job | GitHub Actions zamanlaması | Bildirim politikası |
+| Job | Çalıştırma ve zamanlama | Bildirim politikası |
 |---|---|---|
 | `economic_calendar_refresh_job` | Her gün 07:30 Türkiye | Her tamamlanmada özet |
 | `earnings_refresh_job` | Her gün 08:00 Türkiye | Her tamamlanmada özet |
-| `binance_crypto_latest_prices_job` | Her gün 08:17–00:17, iki saatte bir | Partial/failed |
+| `binance_crypto_latest_prices_job` | AWS EventBridge Scheduler ve Lambda: her gün saat başı | Partial/failed |
 | `bist_latest_prices_job` | Hafta içi 10:30, 12:30, 14:30, 16:30, 18:30 | Partial/failed |
 | `nasdaq_latest_prices_job` | Hafta içi `14:30–21:30 UTC`, saat başı aday tetikleme | Partial/failed |
 | `tefas_latest_prices_job` | Hafta içi 21:00 Türkiye | Partial/failed |
