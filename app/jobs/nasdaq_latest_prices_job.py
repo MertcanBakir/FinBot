@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, List, Optional
 
 from app.core.database import get_db_connection
-from app.models.job_tracking import JobRunSpecification
+from app.models.job_tracking import JobRunContext, JobRunSpecification
 from app.models.nasdaq_prices import (
     NasdaqPricesJobResult,
 )
@@ -126,6 +126,7 @@ def run_job(
     email_service: Optional[EmailService] = None,
     reference_time: Optional[datetime] = None,
     db_connection_factory: Optional[Any] = None,
+    run_context: Optional[JobRunContext] = None,
 ) -> NasdaqPricesJobResult:
     """Execute the NASDAQ100 latest stock prices synchronization job."""
     parser = argparse.ArgumentParser(
@@ -173,6 +174,7 @@ def run_job(
         ),
         dry_run=is_dry_run,
         no_email=args.no_email,
+        context=run_context,
     )
     _print_summary(result)
     return result
