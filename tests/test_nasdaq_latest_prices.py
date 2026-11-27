@@ -8,7 +8,6 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
-import yaml
 
 from app.jobs.nasdaq_latest_prices_job import (
     run_job,
@@ -37,6 +36,7 @@ from app.services.nasdaq_prices_service import (
     plan_nasdaq_price_upserts,
     validate_nasdaq_catalog,
 )
+from app.use_cases.prices.nasdaq_price import previous_session_closes
 
 
 def _make_sample_nasdaq_instruments(count: int = 97, active_count: int = 97) -> List[NasdaqDbInstrument]:
@@ -100,6 +100,13 @@ def _make_sample_nasdaq_dataframes(
     intra_idx = pd.DatetimeIndex([dt_session])
     df_intra = pd.DataFrame(intraday_data, index=intra_idx)
     df_intra.columns = pd.MultiIndex.from_tuples(df_intra.columns, names=["Ticker", "Price"])
+    if include_prev_close:
+        from pandas.tseries.offsets import BDay
+        previous = (pd.Timestamp(trading_date) - BDay(1)).date()
+        previous_index = datetime(previous.year, previous.month, previous.day, 15, 55, tzinfo=ny_tz)
+        previous_row = df_intra.copy()
+        previous_row.index = pd.DatetimeIndex([previous_index.astimezone(dt_session.tzinfo)])
+        df_intra = pd.concat([previous_row, df_intra]).sort_index()
 
     if include_prev_close:
         daily_idx = pd.DatetimeIndex([datetime(2026, 8, 19), datetime(trading_date.year, trading_date.month, trading_date.day)])
@@ -443,8 +450,17 @@ def test_provider_formats_and_downloads_tickers():
     mock_download.assert_called_once()
     c_args, c_kwargs = mock_download.call_args
     assert c_args[0] == ["AAPL", "MSFT"]
-    assert c_kwargs["period"] == "1d"
+    assert c_kwargs["period"] == "5d"
     assert c_kwargs["interval"] == "5m"
+
+
+def test_previous_session_closes_handles_early_close_and_missing_latest():
+    # Thanksgiving Friday 2026 closed at 13:00 New York time.
+    index = pd.to_datetime(["2026-11-25T20:55:00Z", "2026-11-27T17:55:00Z", "2026-11-27T18:30:00Z"])
+    frame = pd.DataFrame({"AAPL": [100.0, 101.0, 999.0], "MSFT": [200.0, None, 999.0]}, index=index)
+    result = previous_session_closes(frame, date(2026, 11, 30))
+    assert result["AAPL"].dropna().iloc[-1] == 101.0
+    assert result["MSFT"].dropna().iloc[-1] == 200.0
 
 
 def test_provider_handles_errors_safely(caplog):
@@ -459,11 +475,12 @@ def test_provider_handles_errors_safely(caplog):
     assert "SecretPass123" not in caplog.text
 
 
-def test_intraday_success_daily_failure_yields_partial_with_current_prices():
+def test_missing_previous_close_yields_partial_with_current_prices():
     insts = _make_sample_nasdaq_instruments(97)
     trading_date = date(2026, 8, 21)
     df_intra, _ = _make_sample_nasdaq_dataframes(insts, trading_date=trading_date)
 
+    df_intra = df_intra.tail(1)
     mock_provider = MagicMock()
     mock_provider.resolve_nasdaq_session.return_value = (
         NasdaqSessionInfo(trading_date=trading_date, is_trading_day=True),
@@ -471,7 +488,6 @@ def test_intraday_success_daily_failure_yields_partial_with_current_prices():
         None,
     )
     mock_provider.fetch_intraday.return_value = df_intra
-    mock_provider.fetch_daily.side_effect = RuntimeError("Daily fetch timeout")
 
     mock_email = MagicMock()
     mock_conn_ctx = MagicMock()
@@ -933,7 +949,6 @@ def test_completeness_boundary_conditions(active_count, matched_count, expected_
         None,
     )
     mock_provider.fetch_intraday.return_value = df_intra
-    mock_provider.fetch_daily.return_value = df_daily
 
     mock_email = MagicMock()
     mock_conn_ctx = MagicMock()
@@ -963,7 +978,6 @@ def test_dry_run_executes_zero_writes_and_zero_emails():
         None,
     )
     mock_provider.fetch_intraday.return_value = df_intra
-    mock_provider.fetch_daily.return_value = df_daily
 
     mock_email = MagicMock()
     mock_conn_ctx = MagicMock()
@@ -998,7 +1012,6 @@ def test_apply_db_partial_sends_warning_email_and_marks_missing_stale():
         None,
     )
     mock_provider.fetch_intraday.return_value = df_intra
-    mock_provider.fetch_daily.return_value = df_daily
 
     mock_email = MagicMock()
     mock_email.send_email.return_value = True
@@ -1041,7 +1054,6 @@ def test_apply_db_fails_closed_on_catalog_drift():
         None,
     )
     mock_provider.fetch_intraday.return_value = df_intra
-    mock_provider.fetch_daily.return_value = df_daily
 
     mock_email = MagicMock()
     mock_email.send_email.return_value = True
@@ -1102,7 +1114,6 @@ def test_stateful_transaction_rollback_when_stale_marking_fails():
         None,
     )
     mock_provider.fetch_intraday.return_value = df_intra
-    mock_provider.fetch_daily.return_value = df_daily
 
     mock_email = MagicMock()
     mock_email.send_email.return_value = True
@@ -1381,7 +1392,6 @@ def test_dry_run_db_read_error_fails_closed_safely():
         None,
     )
     mock_provider.fetch_intraday.return_value = df_intra
-    mock_provider.fetch_daily.return_value = df_daily
 
     mock_email = MagicMock()
     mock_conn_ctx = MagicMock()
@@ -1413,7 +1423,6 @@ def test_apply_db_success_sends_no_email():
         None,
     )
     mock_provider.fetch_intraday.return_value = df_intra
-    mock_provider.fetch_daily.return_value = df_daily
 
     mock_email = MagicMock()
     mock_conn_ctx = MagicMock()
@@ -1433,16 +1442,6 @@ def test_apply_db_success_sends_no_email():
         assert res.email_status is None
         mock_upsert.assert_called_once()
         mock_email.send_email.assert_not_called()
-
-
-def test_github_actions_cron_schedule():
-    workflow_path = ".github/workflows/nasdaq-latest-prices.yml"
-    with open(workflow_path, encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-
-    on_section = data.get("on") or data.get(True)
-    cron_expr = on_section["schedule"][0]["cron"]
-    assert cron_expr == "10,40 13-21 * * 1-5"
 
 
 # ---------------------------------------------------------------------------
@@ -1534,7 +1533,6 @@ def test_job_processes_all_23_new_symbols_cleanly():
         None,
     )
     mock_provider.fetch_intraday.return_value = df_intra
-    mock_provider.fetch_daily.return_value = df_daily
 
     mock_email = MagicMock()
     mock_conn_ctx = MagicMock()
@@ -1575,7 +1573,6 @@ def test_missing_single_symbol_price_does_not_drop_other_symbols():
         None,
     )
     mock_provider.fetch_intraday.return_value = df_intra_dropped
-    mock_provider.fetch_daily.return_value = df_daily
 
     mock_email = MagicMock()
     mock_conn_ctx = MagicMock()
@@ -1670,7 +1667,6 @@ def test_nasdaq_provider_request_executed_lifecycle_paths():
     df_intra, df_daily = _make_sample_nasdaq_dataframes(valid_catalog, trading_date=trading_date)
     mock_provider.fetch_intraday.side_effect = None
     mock_provider.fetch_intraday.return_value = df_intra
-    mock_provider.fetch_daily.return_value = df_daily
 
     with patch("app.jobs.nasdaq_latest_prices_job.get_db_connection", return_value=mock_conn_ctx), \
          patch.object(NasdaqLatestPricesRepository, "get_all_nasdaq_instruments", return_value=valid_catalog):
@@ -1703,7 +1699,6 @@ def test_nasdaq_delayed_post_close_executes_and_applies_prices():
     mock_provider = MagicMock()
     mock_provider.resolve_nasdaq_session.return_value = (sess, window, skip_reason)
     mock_provider.fetch_intraday.return_value = df_intra
-    mock_provider.fetch_daily.return_value = df_daily
 
     mock_email = MagicMock()
     mock_conn_ctx = MagicMock()

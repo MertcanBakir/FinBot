@@ -526,6 +526,9 @@ class NasdaqPricesService:
                         if valid_daily_rows:
                             # Order-independent selection: select row with the maximum previous date
                             best_prev = max(valid_daily_rows, key=lambda x: x["date"])
+                            latest_session = max(pd.Timestamp(idx).date() for idx in daily_df.index)
+                            if best_prev["date"] < latest_session:
+                                warnings.append(f"Ticker '{norm_ticker}': using an older session close as fallback.")
                             prev_close_dec = best_prev["price"].quantize(PRICE_SCALE, rounding=ROUND_HALF_UP)
                             change_amt_dec = (price_dec - prev_close_dec).quantize(PRICE_SCALE, rounding=ROUND_HALF_UP)
                             change_pct_dec = (
