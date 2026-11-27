@@ -7,7 +7,7 @@ from app.core.database import get_db_connection
 from app.models.bist_prices import (
     BistPricesJobResult,
 )
-from app.models.job_tracking import JobRunSpecification
+from app.models.job_tracking import JobRunContext, JobRunSpecification
 from app.providers.bist.yahoo_bist_provider import (
     YahooBistCalendarError,
     YahooBistPriceFetchError,
@@ -124,6 +124,7 @@ def run_job(
     email_service: Optional[EmailService] = None,
     reference_time: Optional[datetime] = None,
     db_connection_factory: Optional[Any] = None,
+    run_context: Optional[JobRunContext] = None,
 ) -> BistPricesJobResult:
     """Execute the BIST100 latest stock prices synchronization job."""
     parser = argparse.ArgumentParser(
@@ -171,6 +172,7 @@ def run_job(
         ),
         dry_run=is_dry_run,
         no_email=args.no_email,
+        context=run_context,
     )
     _print_summary(result)
     return result
