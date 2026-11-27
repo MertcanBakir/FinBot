@@ -28,7 +28,6 @@ from app.providers.nasdaq.yahoo_nasdaq_provider import (
 from app.repositories.nasdaq_latest_prices_repository import (
     NasdaqLatestPricesRepository,
 )
-from app.use_cases.prices.nasdaq_price import previous_session_closes
 from app.services.nasdaq_prices_service import (
     NasdaqPricesService,
     compute_nasdaq_catalog_fingerprint,
@@ -37,6 +36,7 @@ from app.services.nasdaq_prices_service import (
     plan_nasdaq_price_upserts,
     validate_nasdaq_catalog,
 )
+from app.use_cases.prices.nasdaq_price import previous_session_closes
 
 
 def _make_sample_nasdaq_instruments(count: int = 97, active_count: int = 97) -> List[NasdaqDbInstrument]:
