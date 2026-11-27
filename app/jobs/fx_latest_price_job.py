@@ -4,7 +4,7 @@ from typing import Any, List, Optional
 
 from app.core.database import get_db_connection
 from app.models.fx_prices import FxPriceJobResult
-from app.models.job_tracking import JobRunSpecification
+from app.models.job_tracking import JobRunContext, JobRunSpecification
 from app.providers.fx import YahooFxProvider
 from app.repositories.fx_latest_price_repository import FxLatestPriceRepository
 from app.services.email_service import EmailService
@@ -23,6 +23,7 @@ def run_job(
     service: Optional[FxPricesService] = None,
     email_service: Optional[EmailService] = None,
     db_connection_factory: Optional[Any] = None,
+    run_context: Optional[JobRunContext] = None,
 ) -> FxPriceJobResult:
     parser = argparse.ArgumentParser(description="Synchronize USDTRY latest price")
     modes = parser.add_mutually_exclusive_group()
@@ -53,9 +54,11 @@ def run_job(
             provider=provider,
             service=service,
             email_service=email_svc,
+            db_connection_factory=db_connection_factory,
         ),
         dry_run=dry_run,
         no_email=args.no_email,
+        context=run_context,
     )
 
 
@@ -64,15 +67,16 @@ def _execute_fx_price_job(
     provider: Optional[YahooFxProvider] = None,
     service: Optional[FxPricesService] = None,
     email_service: Optional[EmailService] = None,
+    db_connection_factory: Optional[Any] = None,
 ) -> FxPriceJobResult:
     dry_run = not args.apply_db
     provider = provider or YahooFxProvider()
     service = service or FxPricesService()
-    email_svc = email_service or EmailService()
+    connection_factory = db_connection_factory or get_db_connection
     provider_called = False
 
     try:
-        with get_db_connection() as conn:
+        with connection_factory() as conn:
             instrument = FxLatestPriceRepository.get_instrument(conn)
             if not instrument or not instrument["is_active"] or instrument["currency"] != "TRY":
                 raise ValueError("USDTRY reference instrument is missing or invalid")
@@ -95,7 +99,7 @@ def _execute_fx_price_job(
         )
 
         if not dry_run and not unchanged:
-            with get_db_connection() as conn:
+            with connection_factory() as conn:
                 with conn.transaction():
                     current = FxLatestPriceRepository.get_instrument(conn)
                     if current != instrument:

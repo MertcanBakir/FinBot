@@ -238,12 +238,12 @@ Hafta, ay veya özel aralık istekleri Supabase'deki 91 günlük kapsamla hiç k
 | `bist_latest_prices_job` | Hafta içi 10:30, 12:30, 14:30, 16:30, 18:30 | Partial/failed |
 | `nasdaq_latest_prices_job` | Hafta içi `14:30–21:30 UTC`, saat başı aday tetikleme | Partial/failed |
 | `tefas_latest_prices_job` | Hafta içi 21:00 Türkiye | Partial/failed |
-| `fx_latest_price_job` | Hafta içi 08:27–00:27, iki saatte bir | Partial/failed |
+| `fx_latest_price_job` | AWS EventBridge Scheduler ve Lambda: hafta içi 10:00–17:00 Türkiye, saat başı | Partial/failed |
 | `portfolio_snapshots_job` | Her gün 02:00 Türkiye | Partial/failed |
 
 Ek işler:
 
-- `database_health_check`: Manuel ve salt-okunur şema kontrolü.
+- `database_health_check`: Yerel olarak çalıştırılabilen manuel ve salt-okunur şema kontrolü.
 
 ### Fiyat ve snapshot job komutları
 
