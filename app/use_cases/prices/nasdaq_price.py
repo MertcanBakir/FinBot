@@ -1,9 +1,10 @@
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Callable, List, Optional
 
 import pandas as pd
+import pandas_market_calendars as mcal
 
 from app.core.database import get_db_connection
 from app.models.nasdaq_prices import (
@@ -25,6 +26,28 @@ from app.services.nasdaq_prices_service import (
 from app.services.price_sync_transaction import apply_price_sync_transaction
 
 logger = logging.getLogger(__name__)
+
+
+def previous_session_closes(intraday: pd.DataFrame, trading_date) -> pd.DataFrame:
+    """Select last available five-minute closes near the end of the previous two sessions."""
+    if intraday.empty or not isinstance(intraday.index, pd.DatetimeIndex):
+        return pd.DataFrame()
+    schedule = mcal.get_calendar("NASDAQ").schedule(
+        start_date=trading_date - timedelta(days=14), end_date=trading_date - timedelta(days=1)
+    ).tail(2)
+    index = pd.to_datetime(intraday.index, utc=True)
+    rows = []
+    dates = []
+    for session_date, session in schedule.iterrows():
+        close = session["market_close"]
+        mask = (index >= close - timedelta(minutes=10)) & (index <= close)
+        subset = intraday.loc[mask].sort_index()
+        if not subset.empty:
+            rows.append(subset.ffill().iloc[-1])
+        else:
+            rows.append(pd.Series(index=intraday.columns, dtype="float64"))
+        dates.append(session_date)
+    return pd.DataFrame(rows, index=pd.DatetimeIndex(dates), columns=intraday.columns)
 
 
 def execute_nasdaq_price_refresh(
@@ -170,12 +193,12 @@ def execute_nasdaq_price_refresh(
             database_write_executed=False,
         )
 
-    # 5. Fetch batch daily data (isolated error handling)
+    # 5. Derive previous session closes from the same intraday download.
     try:
-        daily_df = provider.fetch_daily(sorted(list(expected_tickers)))
+        daily_df = previous_session_closes(intraday_df, target_trading_date)
     except Exception as exc:
-        logger.warning("Daily data fetch failed; proceeding with current prices only (error_type=%s)", type(exc).__name__)
-        all_warnings.append("Daily historical prices could not be downloaded from Yahoo Finance.")
+        logger.warning("Previous session close calculation failed (error_type=%s)", type(exc).__name__)
+        all_warnings.append("Previous session closes could not be calculated.")
         daily_df = pd.DataFrame()
 
     # 6. Normalize and validate ticker responses

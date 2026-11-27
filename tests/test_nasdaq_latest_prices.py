@@ -29,6 +29,7 @@ from app.providers.nasdaq.yahoo_nasdaq_provider import (
 from app.repositories.nasdaq_latest_prices_repository import (
     NasdaqLatestPricesRepository,
 )
+from app.use_cases.prices.nasdaq_price import previous_session_closes
 from app.services.nasdaq_prices_service import (
     NasdaqPricesService,
     compute_nasdaq_catalog_fingerprint,
@@ -100,6 +101,13 @@ def _make_sample_nasdaq_dataframes(
     intra_idx = pd.DatetimeIndex([dt_session])
     df_intra = pd.DataFrame(intraday_data, index=intra_idx)
     df_intra.columns = pd.MultiIndex.from_tuples(df_intra.columns, names=["Ticker", "Price"])
+    if include_prev_close:
+        from pandas.tseries.offsets import BDay
+        previous = (pd.Timestamp(trading_date) - BDay(1)).date()
+        previous_index = datetime(previous.year, previous.month, previous.day, 15, 55, tzinfo=ny_tz)
+        previous_row = df_intra.copy()
+        previous_row.index = pd.DatetimeIndex([previous_index.astimezone(dt_session.tzinfo)])
+        df_intra = pd.concat([previous_row, df_intra]).sort_index()
 
     if include_prev_close:
         daily_idx = pd.DatetimeIndex([datetime(2026, 8, 19), datetime(trading_date.year, trading_date.month, trading_date.day)])
@@ -443,8 +451,17 @@ def test_provider_formats_and_downloads_tickers():
     mock_download.assert_called_once()
     c_args, c_kwargs = mock_download.call_args
     assert c_args[0] == ["AAPL", "MSFT"]
-    assert c_kwargs["period"] == "1d"
+    assert c_kwargs["period"] == "5d"
     assert c_kwargs["interval"] == "5m"
+
+
+def test_previous_session_closes_handles_early_close_and_missing_latest():
+    # Thanksgiving Friday 2026 closed at 13:00 New York time.
+    index = pd.to_datetime(["2026-11-25T20:55:00Z", "2026-11-27T17:55:00Z", "2026-11-27T18:30:00Z"])
+    frame = pd.DataFrame({"AAPL": [100.0, 101.0, 999.0], "MSFT": [200.0, None, 999.0]}, index=index)
+    result = previous_session_closes(frame, date(2026, 11, 30))
+    assert result["AAPL"].dropna().iloc[-1] == 101.0
+    assert result["MSFT"].dropna().iloc[-1] == 200.0
 
 
 def test_provider_handles_errors_safely(caplog):
@@ -464,6 +481,7 @@ def test_intraday_success_daily_failure_yields_partial_with_current_prices():
     trading_date = date(2026, 8, 21)
     df_intra, _ = _make_sample_nasdaq_dataframes(insts, trading_date=trading_date)
 
+    df_intra = df_intra.tail(1)
     mock_provider = MagicMock()
     mock_provider.resolve_nasdaq_session.return_value = (
         NasdaqSessionInfo(trading_date=trading_date, is_trading_day=True),

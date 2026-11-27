@@ -143,7 +143,7 @@ class YahooNasdaqPriceProvider:
         try:
             df_intraday = self._download_fn(
                 ticker_list,
-                period="1d",
+                period="5d",
                 interval="5m",
                 auto_adjust=False,
                 actions=False,
