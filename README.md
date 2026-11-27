@@ -298,7 +298,9 @@ python -m app.jobs.database_health_check
 
 ### NASDAQ gecikme dayanıklılığı
 
-NASDAQ workflow'u GitHub Actions gecikmelerinde geçerli çalışmayı kaçırmamak için sabit slot kullanmaz.
+NASDAQ fiyat job'u AWS Lambda'da çalışır. EventBridge Scheduler, America/New_York saatine göre hafta içi 10:00–16:00 arasında saat başı tetikler. Job, NASDAQ takvimini kontrol ederek tatil ve seans dışı durumları yönetir.
+
+Güncel fiyat ve önceki seans kapanışına yakın fiyat aynı beş günlük, beş dakikalık veri setinden hesaplanır; bu değer resmi günlük kapanıştan farklı olabilir.
 
 - Başlangıç: `market_open + 30 dakika`
 - Bitiş: `market_close + 6 saat`
