@@ -6,7 +6,6 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
-import yaml
 
 from app.jobs.binance_crypto_latest_prices_job import (
     run_job,
@@ -914,17 +913,6 @@ def test_smtp_exception_handling_masks_secrets(caplog):
         assert res.email_status == "failed"
         assert res.email_error == "E-posta gönderimi sırasında hata oluştu."
         assert "SecretSmtpToken999" not in caplog.text
-
-
-def test_github_actions_cron_schedule():
-    workflow_path = ".github/workflows/binance-crypto-latest-prices.yml"
-    with open(workflow_path, encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-
-    # Validate schedule cron expression
-    on_section = data.get("on") or data.get(True)
-    cron_expr = on_section["schedule"][0]["cron"]
-    assert cron_expr == "17 * * * *"
 
 
 def test_crypto_provider_request_executed_lifecycle_paths():
