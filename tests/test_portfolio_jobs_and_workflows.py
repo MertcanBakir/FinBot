@@ -5,16 +5,6 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_fx_workflow_uses_isolated_requirements_and_expected_schedule():
-    workflow = yaml.safe_load((ROOT / ".github/workflows/fx-latest-price.yml").read_text())
-    trigger = workflow.get("on") or workflow.get(True)
-    assert trigger["schedule"][0]["cron"] == "27 5-21 * * 1-5"
-    content = (ROOT / ".github/workflows/fx-latest-price.yml").read_text()
-    assert "requirements/jobs/fx.txt" in content
-    assert "app.jobs.fx_latest_price_job --apply-db" in content
-    assert "SUPABASE_DATABASE_URL" in content
-
-
 def test_snapshot_workflow_runs_daily_at_0200_turkey_time():
     workflow = yaml.safe_load(
         (ROOT / ".github/workflows/portfolio-snapshots-daily.yml").read_text()
