@@ -235,7 +235,7 @@ Hafta, ay veya özel aralık istekleri Supabase'deki 91 günlük kapsamla hiç k
 | `economic_calendar_refresh_job` | Her gün 07:30 Türkiye | Her tamamlanmada özet |
 | `earnings_refresh_job` | Her gün 08:00 Türkiye | Her tamamlanmada özet |
 | `binance_crypto_latest_prices_job` | AWS EventBridge Scheduler ve Lambda: her gün saat başı | Partial/failed |
-| `bist_latest_prices_job` | Hafta içi 10:30, 12:30, 14:30, 16:30, 18:30 | Partial/failed |
+| `bist_latest_prices_job` | Hafta içi 10:00–18:00, saat başı (Türkiye) | Partial/failed |
 | `nasdaq_latest_prices_job` | Hafta içi `14:30–21:30 UTC`, saat başı aday tetikleme | Partial/failed |
 | `tefas_latest_prices_job` | Hafta içi 21:00 Türkiye | Partial/failed |
 | `fx_latest_price_job` | AWS EventBridge Scheduler ve Lambda: hafta içi 10:00–17:00 Türkiye, saat başı | Partial/failed |
