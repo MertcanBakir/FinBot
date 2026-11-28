@@ -32,7 +32,7 @@ def pg_connection_info(tmp_path_factory):
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
-    subprocess.run([str(binaries / "initdb"), "-D", str(root / "db"), "-U", "postgres", "-A", "trust", "--no-locale"], check=True, capture_output=True)
+    subprocess.run([str(binaries / "initdb"), "-D", str(root / "db"), "-U", "postgres", "-A", "trust", "--no-locale", "-E", "UTF8"], check=True, capture_output=True)
     subprocess.run([str(binaries / "pg_ctl"), "-D", str(root / "db"), "-l", str(root / "log"), "-o", f"-h 127.0.0.1 -p {port} -c unix_socket_directories=''", "-w", "start"], check=True, capture_output=True)
     info = dict(host="127.0.0.1", port=port, user="postgres", dbname="postgres")
     try:
