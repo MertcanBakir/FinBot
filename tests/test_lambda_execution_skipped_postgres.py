@@ -39,8 +39,8 @@ def pg_connection_info(tmp_path_factory):
         with CONNECT(**info, autocommit=True) as conn:
             conn.execute("CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_role; CREATE SCHEMA private", prepare=False)
             conn.execute((ROOT / "supabase/migrations/20261127080046_crypto_job_idempotency.sql").read_text(), prepare=False)
-            conn.execute((ROOT / "supabase/migrations/20261128100147_job_execution_skipped.sql").read_text(), prepare=False)
-            conn.execute((ROOT / "supabase/migrations/20261128101250_lambda_job_leases.sql").read_text(), prepare=False)
+            conn.execute((ROOT / "supabase/migrations/20261128102109_job_execution_skipped.sql").read_text(), prepare=False)
+            conn.execute((ROOT / "supabase/migrations/20261128102125_lambda_job_leases.sql").read_text(), prepare=False)
         yield info
     finally:
         subprocess.run([str(binaries / "pg_ctl"), "-D", str(root / "db"), "-m", "fast", "-w", "stop"], check=True, capture_output=True)
