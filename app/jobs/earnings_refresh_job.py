@@ -217,23 +217,6 @@ class EarningsRefreshJob:
         else:
             overall_status: RefreshStatus = "partial"
 
-        # 6. BIST symbol metrics calculation (ONLY from current bist_fetch)
-        if bist_fetch and bist_fetch.symbol_results:
-            bist_sym_results = bist_fetch.symbol_results
-            bist_total_symbols = bist_fetch.metrics.input_symbol_count if (bist_fetch.metrics and bist_fetch.metrics.input_symbol_count > 0) else len(bist_sym_results)
-            bist_completed_symbols = sum(1 for s in bist_sym_results if s.is_complete)
-            bist_unavailable_symbols_count = sum(1 for s in bist_sym_results if not s.is_complete)
-            bist_scheduled_symbols = sum(1 for s in bist_sym_results if s.is_complete and s.calendar_status == "scheduled")
-            bist_healthy_negatives = sum(1 for s in bist_sym_results if s.is_complete and s.calendar_status == "no_announced_date_in_coverage")
-            bist_unavail_list = sorted([s.symbol for s in bist_sym_results if not s.is_complete])
-        else:
-            bist_total_symbols = None
-            bist_completed_symbols = None
-            bist_unavailable_symbols_count = None
-            bist_scheduled_symbols = None
-            bist_healthy_negatives = None
-            bist_unavail_list = []
-
         # 7. Official IR summary calculation
         official_ir_summary: Optional[OfficialIrRefreshSummary] = None
         if not isinstance(bist_res, Exception) and getattr(bist_res, "combined_result", None):

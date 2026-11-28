@@ -28,7 +28,7 @@ def _execution_key(event: dict) -> str:
         raise ValueError("Live manual execution requires a UUID request_id") from exc
 
 
-def run_tracked_lambda_job(event, *, job_name, mode_name, lock_key, busy_message, failure_message, connection_factory, execute_job, lambda_context=None):
+def run_tracked_lambda_job(event, *, job_name, mode_name, busy_message, failure_message, connection_factory, execute_job, lambda_context=None):
     if not isinstance(event, dict):
         raise ValueError("Event must be an object")
     mode = os.environ.get(mode_name, "dry-run")

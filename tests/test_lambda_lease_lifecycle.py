@@ -29,7 +29,7 @@ def test_connection_is_closed_before_external_job(monkeypatch):
 
     result = run_tracked_lambda_job(
         {"request_id": "fa0bbfe5-b247-4ac4-a79e-5ec953dc6450"},
-        job_name="test_job", mode_name="TEST_JOB_MODE", lock_key="test",
+        job_name="test_job", mode_name="TEST_JOB_MODE", 
         busy_message="busy", failure_message="failed", connection_factory=connection,
         execute_job=execute_job,
     )
@@ -52,7 +52,7 @@ def test_unexpected_error_records_failure_and_releases_lease(monkeypatch):
     with pytest.raises(ValueError, match="unexpected"):
         run_tracked_lambda_job(
             {"request_id": "fa0bbfe5-b247-4ac4-a79e-5ec953dc6450"},
-            job_name="test_job", mode_name="TEST_JOB_MODE", lock_key="test",
+            job_name="test_job", mode_name="TEST_JOB_MODE", 
             busy_message="busy", failure_message="failed", connection_factory=connection,
             execute_job=execute_job,
         )
@@ -71,7 +71,7 @@ def test_lease_covers_remaining_lambda_time_with_safety_margin(monkeypatch):
         yield conn
 
     run_tracked_lambda_job(
-        {}, job_name="test_job", mode_name="TEST_JOB_MODE", lock_key="test",
+        {}, job_name="test_job", mode_name="TEST_JOB_MODE", 
         busy_message="busy", failure_message="failed", connection_factory=connection,
         execute_job=lambda **kwargs: SimpleNamespace(status="success"),
         lambda_context=SimpleNamespace(get_remaining_time_in_millis=lambda: 300000),

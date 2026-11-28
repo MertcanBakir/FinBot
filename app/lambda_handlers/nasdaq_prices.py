@@ -9,7 +9,6 @@ from app.lambda_handlers.common import run_tracked_lambda_job
 def lambda_handler(event, context):
     return run_tracked_lambda_job(
         event, job_name="nasdaq_latest_prices_job", mode_name="NASDAQ_JOB_MODE",
-        lock_key="finbot:nasdaq-prices",
         busy_message="NASDAQ job is already running; retry later",
         failure_message="NASDAQ price job failed; inspect the job logs.",
         connection_factory=get_db_connection, execute_job=execute_tracked_job, lambda_context=context,

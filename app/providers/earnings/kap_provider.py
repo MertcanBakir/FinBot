@@ -188,7 +188,6 @@ def parse_kap_financial_calendar_html(html_content: str) -> KapCalendarParseResu
         if not trs:
             continue
 
-        header_cell_count: Optional[int] = None
         header_planned_idx: Optional[int] = None
         header_start_idx: Optional[int] = None
         header_end_idx: Optional[int] = None
@@ -201,7 +200,6 @@ def parse_kap_financial_calendar_html(html_content: str) -> KapCalendarParseResu
             if ("dönem başlangıç" in combined or "period beginning" in combined) and \
                ("dönem bitiş" in combined or "period ending" in combined) and \
                ("planlanan kap" in combined or "planned" in combined):
-                header_cell_count = len(cell_texts)
                 for idx, text in enumerate(cell_texts):
                     t_lower = text.lower()
                     if "planlanan" in t_lower or "planned" in t_lower:

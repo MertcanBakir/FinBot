@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any, List, Optional
 
 from app.core.database import get_db_connection
+from app.core.error_sanitization import contains_sensitive_price_error
 from app.models.job_tracking import JobRunContext, JobRunSpecification
 from app.models.nasdaq_prices import (
     NasdaqPricesJobResult,
@@ -37,7 +38,7 @@ def sanitize_error_message(exc: Exception) -> str:
     msg = str(exc)
 
     lower_msg = msg.lower()
-    if any(k in lower_msg for k in ("password", "auth", "credential", "dsn", "secret", "token", "key", "http:", "https:", "://", "@", "cookie", "crumb")):
+    if contains_sensitive_price_error(msg, include_cookies=True):
         return "Veritabanı veya servis erişim hatası."
 
     if isinstance(exc, (ValueError, RuntimeError, YahooNasdaqCalendarError, YahooNasdaqPriceFetchError)):

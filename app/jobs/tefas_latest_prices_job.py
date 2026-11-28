@@ -3,6 +3,7 @@ import sys
 from typing import Any, List, Optional
 
 from app.core.database import get_db_connection
+from app.core.error_sanitization import contains_sensitive_price_error
 from app.models.job_tracking import JobRunContext, JobRunSpecification
 from app.models.tefas_prices import (
     TefasPricesJobResult,
@@ -31,7 +32,7 @@ def sanitize_error_message(exc: Exception) -> str:
 
     # Check for any sensitive credentials/DSN/token/URL patterns FIRST
     lower_msg = msg.lower()
-    if any(k in lower_msg for k in ("password", "auth", "credential", "dsn", "secret", "token", "key", "http:", "https:", "://", "@")):
+    if contains_sensitive_price_error(msg):
         return "Veritabanı veya servis erişim hatası."
 
     # Safe domain validation/logic messages (only if free of secrets)

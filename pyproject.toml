@@ -35,10 +35,9 @@ target-version = "py311"
 line-length = 88
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP"]
+select = ["E", "F", "I", "B", "UP", "ARG"]
 ignore = [
     "E501",  # Line wrapping belongs to the formatter, which is not enabled yet.
-    "F841",  # Existing jobs/tests intentionally retain some diagnostic results.
     "UP006", # Keep the existing typing style out of the first lint migration.
     "UP007",
     "UP017",
@@ -48,5 +47,6 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ARG", "F841"] # Fixtures and mocks use interface-required arguments.
 "scripts/export_reference_seed.py" = ["E402"]
 "tests/test_earnings_refresh_job.py" = ["E402"]

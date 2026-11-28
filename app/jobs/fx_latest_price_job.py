@@ -69,7 +69,6 @@ def execute_tracked_job(
             dry_run=dry_run,
             provider=provider,
             service=service,
-            email_service=email_svc,
             db_connection_factory=db_connection_factory,
         ),
         dry_run=dry_run,
@@ -82,7 +81,6 @@ def _execute_fx_price_job(
     dry_run: bool,
     provider: Optional[YahooFxProvider] = None,
     service: Optional[FxPricesService] = None,
-    email_service: Optional[EmailService] = None,
     db_connection_factory: Optional[Any] = None,
 ) -> FxPriceJobResult:
     provider = provider or YahooFxProvider()

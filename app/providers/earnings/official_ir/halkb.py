@@ -453,7 +453,6 @@ class HalkbIrProvider(BaseOfficialIrProvider):
                 merged_warnings.append(w)
 
         total_rows_seen = primary_res.rows_seen + secondary_res.rows_seen
-        total_accepted = primary_res.accepted_row_count + secondary_res.accepted_row_count
         total_rejected = primary_res.rejected_row_count + secondary_res.rejected_row_count
         total_retries = primary_res.retry_count + secondary_res.retry_count
 
