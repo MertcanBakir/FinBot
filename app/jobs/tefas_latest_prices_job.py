@@ -58,7 +58,6 @@ def run_job(
     db_connection_factory: Optional[Any] = None,
     run_context: Optional[JobRunContext] = None,
 ) -> TefasPricesJobResult:
-    """Execute the daily TEFAS dynamic catalog reconciliation, pricing, and change tracking job."""
     parser = argparse.ArgumentParser(
         description="Fetch, reconcile catalog, and synchronize latest TEFAS fund prices with change tracking to Supabase."
     )
@@ -75,8 +74,24 @@ def run_job(
     )
     parser.add_argument("--no-email", action="store_true", help="Disable email delivery.")
     args = parser.parse_args(argv)
+    return execute_tracked_job(
+        dry_run=not args.apply_db, no_email=args.no_email,
+        provider=provider, service=service, email_service=email_service, db_connection_factory=db_connection_factory, run_context=run_context,
+    )
 
-    is_dry_run = not args.apply_db
+
+def execute_tracked_job(
+    *,
+    dry_run: bool = True,
+    no_email: bool = False,
+    provider: Optional[TefasPriceProvider] = None,
+    service: Optional[TefasPricesService] = None,
+    email_service: Optional[EmailService] = None,
+    db_connection_factory: Optional[Any] = None,
+    run_context: Optional[JobRunContext] = None,
+) -> TefasPricesJobResult:
+
+
     email_svc = email_service or EmailService()
 
     runner = TrackedJobRunner(
@@ -95,15 +110,15 @@ def run_job(
 
     result = runner.run(
         lambda _ctx: _execute_tefas_prices_job(
-            apply_db=args.apply_db,
+            apply_db=not dry_run,
             provider=provider,
             service=service,
             db_connection_factory=db_connection_factory or get_db_connection,
             sanitize_error_message=sanitize_error_message,
             summary_printer=_print_summary,
         ),
-        dry_run=is_dry_run,
-        no_email=args.no_email,
+        dry_run=dry_run,
+        no_email=no_email,
         context=run_context,
     )
     _print_summary(result)

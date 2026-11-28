@@ -31,7 +31,23 @@ def run_job(
     modes.add_argument("--apply-db", action="store_true")
     parser.add_argument("--no-email", action="store_true")
     args = parser.parse_args(argv)
-    dry_run = not args.apply_db
+    return execute_tracked_job(
+        dry_run=not args.apply_db, no_email=args.no_email,
+        provider=provider, service=service, email_service=email_service, db_connection_factory=db_connection_factory, run_context=run_context,
+    )
+
+
+def execute_tracked_job(
+    *,
+    dry_run: bool = True,
+    no_email: bool = False,
+    provider: Optional[YahooFxProvider] = None,
+    service: Optional[FxPricesService] = None,
+    email_service: Optional[EmailService] = None,
+    db_connection_factory: Optional[Any] = None,
+    run_context: Optional[JobRunContext] = None,
+) -> FxPriceJobResult:
+
     email_svc = email_service or EmailService()
 
     runner = TrackedJobRunner(
@@ -50,26 +66,25 @@ def run_job(
 
     return runner.run(
         lambda _ctx: _execute_fx_price_job(
-            args=args,
+            dry_run=dry_run,
             provider=provider,
             service=service,
             email_service=email_svc,
             db_connection_factory=db_connection_factory,
         ),
         dry_run=dry_run,
-        no_email=args.no_email,
+        no_email=no_email,
         context=run_context,
     )
 
 
 def _execute_fx_price_job(
-    args: argparse.Namespace,
+    dry_run: bool,
     provider: Optional[YahooFxProvider] = None,
     service: Optional[FxPricesService] = None,
     email_service: Optional[EmailService] = None,
     db_connection_factory: Optional[Any] = None,
 ) -> FxPriceJobResult:
-    dry_run = not args.apply_db
     provider = provider or YahooFxProvider()
     service = service or FxPricesService()
     connection_factory = db_connection_factory or get_db_connection

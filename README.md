@@ -165,6 +165,21 @@ requirements/jobs/portfolio-snapshots.txt
 requirements/jobs/tefas.txt
 ```
 
+### Lambda paketleri
+
+Python 3.12, Amazon Linux ve x86_64 için paket oluşturmak üzere ortak
+paketleyicide job adı kullanılır:
+
+```bash
+python scripts/build_lambda_package.py crypto --output finbot-crypto-lambda.zip
+```
+
+Job adı `bist`, `nasdaq`, `crypto`, `fx` veya `tefas` olabilir. Önceden
+kullanılan `scripts/build_bist_lambda_package.py` gibi job'a özel komutlar da
+aynı paketleyiciyi kullanır; crypto için `scripts/build_crypto_lambda_package.py`
+komutu da kullanılabilir. Paket içindeki bağımlılıklar her job'un kendi
+`requirements/jobs/` dosyasından kurulur.
+
 ### Ortam değişkenleri
 
 `.env.example` dosyasını temel alın:

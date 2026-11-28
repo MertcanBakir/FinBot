@@ -1,4 +1,3 @@
-import argparse
 from datetime import datetime, timezone
 from decimal import Decimal
 from unittest.mock import MagicMock
@@ -65,7 +64,7 @@ def test_fx_job_dry_run_fetches_and_normalizes_without_writing(monkeypatch):
     monkeypatch.setattr(fx_latest_price_job.FxLatestPriceRepository, "upsert", upsert)
 
     result = fx_latest_price_job._execute_fx_price_job(
-        argparse.Namespace(apply_db=False),
+        dry_run=True,
         provider=provider,
         service=service,
     )
@@ -112,7 +111,7 @@ def test_fx_job_apply_writes_only_after_catalog_recheck(monkeypatch):
     )
 
     result = fx_latest_price_job._execute_fx_price_job(
-        argparse.Namespace(apply_db=True),
+        dry_run=False,
         provider=provider,
         service=service,
     )
@@ -136,7 +135,7 @@ def test_fx_job_fails_closed_before_provider_when_catalog_is_invalid(monkeypatch
     )
 
     result = fx_latest_price_job._execute_fx_price_job(
-        argparse.Namespace(apply_db=True),
+        dry_run=False,
         provider=provider,
         service=MagicMock(),
     )
