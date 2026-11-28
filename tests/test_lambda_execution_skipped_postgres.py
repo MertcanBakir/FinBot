@@ -94,7 +94,7 @@ def test_active_lease_blocks_distinct_triggers_and_expired_lease_recovers(monkey
 
     monkeypatch.setenv("LEASE_TEST_MODE", "apply-db")
     event = {"request_id": str(uuid4())}
-    kwargs = dict(job_name=job_name, mode_name="LEASE_TEST_MODE", lock_key="unused",
+    kwargs = dict(job_name=job_name, mode_name="LEASE_TEST_MODE",
                   busy_message="busy", failure_message="failed", connection_factory=connection,
                   execute_job=lambda **kw: SimpleNamespace(status="success"))
     with pytest.raises(RuntimeError, match="busy"):
@@ -144,7 +144,7 @@ def test_concurrent_different_triggers_cannot_run_same_job(monkeypatch, pg_conne
         return SimpleNamespace(status="success")
 
     monkeypatch.setenv("LEASE_TEST_MODE", "apply-db")
-    kwargs = dict(job_name=f"lease-test-{uuid4()}", mode_name="LEASE_TEST_MODE", lock_key="unused",
+    kwargs = dict(job_name=f"lease-test-{uuid4()}", mode_name="LEASE_TEST_MODE",
                   busy_message="busy", failure_message="failed", connection_factory=connection,
                   execute_job=job)
     with ThreadPoolExecutor(max_workers=1) as executor:
