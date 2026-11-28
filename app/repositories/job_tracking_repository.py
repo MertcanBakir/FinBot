@@ -1,12 +1,14 @@
 import json
 import logging
-import re
 from datetime import datetime
 from typing import Any, Dict, Optional, Sequence
 from uuid import UUID
 
 from psycopg import Connection
 
+from app.core.error_sanitization import (
+    sanitize_tracking_error as sanitize_tracking_error,
+)
 from app.models.job_tracking import (
     DuplicateJobRunError,
     JobRunContext,
@@ -20,30 +22,6 @@ from app.models.job_tracking import (
 )
 
 logger = logging.getLogger(__name__)
-
-SECRET_PATTERNS = [
-    re.compile(r"(postgres(?:ql)?|https?|http|ftp)://([^:]+):([^@]+)@", re.IGNORECASE),
-    re.compile(r"(password|passwd|pwd|secret|token|api[_-]?key|credential|bearer|smtp_password)\s*[:=]\s*([^\s,;]+)", re.IGNORECASE),
-    re.compile(r"Bearer\s+[a-zA-Z0-9_\-\.]+", re.IGNORECASE),
-    re.compile(r"ghp_[a-zA-Z0-9]+", re.IGNORECASE),
-    re.compile(r"ey[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}", re.IGNORECASE),
-]
-
-
-def sanitize_tracking_error(err: Optional[str]) -> Optional[str]:
-    """Ensure error messages stored in telemetry and logs are free of credentials and DSN secrets."""
-    if not err:
-        return None
-    lower = err.lower()
-    if any(k in lower for k in ("postgres://", "postgresql://", "password=", "passwd=", "secret=", "token=", "smtp_password", "access_key", "secret_key")):
-        if "postgresql://" in lower or "postgres://" in lower:
-            return "Veritabanı veya servis erişim hatası."
-    sanitized = err
-    sanitized = re.sub(r"(postgres(?:ql)?|https?|http|ftp)://([^:]+):([^@]+)@", r"\1://\2:***MASKED***@", sanitized)
-    for pattern in SECRET_PATTERNS[1:]:
-        sanitized = pattern.sub("[REDACTED]", sanitized)
-    return sanitized
-
 
 SENSITIVE_KEY_NAMES = {
     "password", "passwd", "pwd", "secret", "token", "api_key", "apikey",

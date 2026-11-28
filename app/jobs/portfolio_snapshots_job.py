@@ -115,7 +115,6 @@ def run_job(
     return runner.run(
         lambda _ctx: _execute_portfolio_snapshots_job(
             args=args,
-            email_service=email_svc,
         ),
         dry_run=dry_run,
         no_email=args.no_email,
@@ -124,7 +123,6 @@ def run_job(
 
 def _execute_portfolio_snapshots_job(
     args: argparse.Namespace,
-    email_service: Optional[EmailService] = None,
 ) -> PortfolioSnapshotJobResult:
     started_at = datetime.now(timezone.utc)
     dry_run = not args.apply_db

@@ -3,6 +3,7 @@ import sys
 from typing import Any, List, Optional
 
 from app.core.database import get_db_connection
+from app.core.error_sanitization import contains_sensitive_price_error
 from app.models.crypto_prices import (
     CryptoPricesJobResult,
 )
@@ -34,7 +35,7 @@ def sanitize_error_message(exc: Exception) -> str:
     msg = str(exc)
 
     lower_msg = msg.lower()
-    if any(k in lower_msg for k in ("password", "auth", "credential", "dsn", "secret", "token", "key", "http:", "https:", "://", "@")):
+    if contains_sensitive_price_error(msg):
         return "Veritabanı veya servis erişim hatası."
 
     if isinstance(exc, (ValueError, RuntimeError)):
@@ -115,7 +116,6 @@ def run_job(
     db_connection_factory: Optional[Any] = None,
     run_context: Optional[JobRunContext] = None,
 ) -> CryptoPricesJobResult:
-    """Execute the Binance cryptocurrency latest prices synchronization job."""
     parser = argparse.ArgumentParser(
         description="Fetch and synchronize 24hr cryptocurrency latest prices from Binance to Supabase."
     )
@@ -132,8 +132,24 @@ def run_job(
     )
     parser.add_argument("--no-email", action="store_true", help="Disable email delivery.")
     args = parser.parse_args(argv)
+    return execute_tracked_job(
+        dry_run=not args.apply_db, no_email=args.no_email,
+        provider=provider, service=service, email_service=email_service, db_connection_factory=db_connection_factory, run_context=run_context,
+    )
 
-    is_dry_run = not args.apply_db
+
+def execute_tracked_job(
+    *,
+    dry_run: bool = True,
+    no_email: bool = False,
+    provider: Optional[BinancePriceProvider] = None,
+    service: Optional[CryptoPricesService] = None,
+    email_service: Optional[EmailService] = None,
+    db_connection_factory: Optional[Any] = None,
+    run_context: Optional[JobRunContext] = None,
+) -> CryptoPricesJobResult:
+
+
     email_svc = email_service or EmailService()
 
     runner = TrackedJobRunner(
@@ -152,15 +168,15 @@ def run_job(
 
     result = runner.run(
         lambda _ctx: _execute_crypto_prices_job(
-            apply_db=args.apply_db,
+            apply_db=not dry_run,
             provider=provider,
             service=service,
             db_connection_factory=db_connection_factory or get_db_connection,
             sanitize_error_message=sanitize_error_message,
             summary_printer=_print_summary,
         ),
-        dry_run=is_dry_run,
-        no_email=args.no_email,
+        dry_run=dry_run,
+        no_email=no_email,
         context=run_context,
     )
     _print_summary(result)

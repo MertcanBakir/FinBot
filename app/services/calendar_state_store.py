@@ -46,11 +46,6 @@ def merge_bist_partial_calendar(
     current_sym_results = {s.symbol: s.model_copy(deep=True) for s in current.symbol_results}
     prev_sym_results = {s.symbol: s.model_copy(deep=True) for s in previous.symbol_results}
 
-    # Track complete vs incomplete symbols in current
-    complete_symbols: Set[str] = {
-        sym for sym, st in current_sym_results.items() if st.is_complete
-    }
-
     # Identify symbols present in previous but completely missing from current
     missing_symbols = set(prev_sym_results.keys()) - set(current_sym_results.keys())
     for sym in missing_symbols:

@@ -151,7 +151,6 @@ def merge_partial_economic_calendar(
             filtered_final_events.append(picked)
         else:
             fresh_events = [e for e in group if not e.carried_forward]
-            carried_events = [e for e in group if e.carried_forward]
 
             if len(fresh_events) == 1:
                 # 2. Exactly 1 fresh + 1 or more carried with different timestamps: fresh is authoritative

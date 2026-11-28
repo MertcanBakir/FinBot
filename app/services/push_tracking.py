@@ -19,7 +19,7 @@ class PushAdapter:
 
 
 class PushRenderer:
-    def render(self, result):
+    def render(self, result):  # noqa: ARG002 - required renderer interface
         return "FinBot Push operasyonu", "Push işleme tamamlandı.", None
 
 
