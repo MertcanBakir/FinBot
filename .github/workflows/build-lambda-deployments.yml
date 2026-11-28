@@ -1,0 +1,30 @@
+name: Build Lambda deployment packages
+on:
+  push:
+    branches: [build/lambda-packages-20261128]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        job: [bist, nasdaq, crypto, fx, tefas]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: c30e89f1bd7aef6a5d99a31231a77cab585fc845
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Build package
+        run: python scripts/build_lambda_package.py "${{ matrix.job }}" --output "finbot-${{ matrix.job }}-lambda.zip"
+      - name: Upload package
+        uses: actions/upload-artifact@v7
+        with:
+          name: finbot-${{ matrix.job }}-lambda
+          path: finbot-${{ matrix.job }}-lambda.zip
+          if-no-files-found: error
+          retention-days: 7
